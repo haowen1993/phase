@@ -81,6 +81,13 @@ describe("i18n resources", () => {
     expect(normalizeSupportedLng("zh-Hans", "fr")).toBe("zh");
     expect(normalizeSupportedLng("zh-CN", "en")).toBe("zh");
     expect(normalizeSupportedLng("zh", "en")).toBe("zh");
+    // An explicit `hans` script subtag outranks a region in BCP 47, so these
+    // are Simplified script with a Traditional-leaning region and must stay on
+    // the Simplified catalog. Matching a Traditional subtag anywhere in the tag
+    // sent them to English — a valid tag silently losing its locale.
+    expect(normalizeSupportedLng("zh-Hans-HK", "en")).toBe("zh");
+    expect(normalizeSupportedLng("zh-Hans-MO", "en")).toBe("zh");
+    expect(normalizeSupportedLng("zh-Hans-TW", "en")).toBe("zh");
     expect(normalizeSupportedLng(null, "it")).toBe("it");
   });
 

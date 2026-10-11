@@ -41,13 +41,18 @@ export function normalizeSupportedLng(value: unknown, fallback: SupportedLng): S
   if (typeof value !== "string") return fallback;
   const subtags = value.trim().toLowerCase().split("-");
   const prefix = subtags[0] ?? "";
-  // A Traditional reader is not a Simplified reader. We ship no `zh-Hant`
-  // catalog, and the Chinese card text and art maps are Simplified-only, so
-  // treating `zh-TW` as `zh` would show Traditional users Simplified chrome over
-  // Simplified card data — wrong on every axis at once. Falling back to English
-  // is the honest outcome until a Traditional catalog exists.
-  if (prefix === "zh" && subtags.some((tag) => TRADITIONAL_CHINESE_SUBTAGS.has(tag))) {
-    return fallback;
+  if (prefix === "zh") {
+    // An explicit script subtag outranks a region in BCP 47, so `zh-Hans-HK` is
+    // Simplified *with* a Hong Kong region and must NOT be routed to the
+    // fallback by the region check below. Test `hans` first.
+    const simplified = subtags.includes("hans");
+    if (!simplified && subtags.some((tag) => TRADITIONAL_CHINESE_SUBTAGS.has(tag))) {
+      // A Traditional reader is not a Simplified reader. We ship no `zh-Hant`
+      // catalog, so treating `zh-TW` as `zh` would show Traditional users
+      // Simplified chrome with no signal. Falling back to English is the honest
+      // outcome until a Traditional catalog exists.
+      return fallback;
+    }
   }
   return isSupportedLng(prefix) ? prefix : fallback;
 }
