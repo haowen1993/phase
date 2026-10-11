@@ -84,8 +84,6 @@ const LANGUAGE_OPTIONS: { value: SupportedLng; label: string }[] = [
   { value: "pt", label: "Português" },
   { value: "pl", label: "Polski" },
   { value: "ja", label: "日本語" },
-  // Autonym, like every other entry — deliberately not translated.
-  { value: "zh", label: "简体中文" },
 ];
 
 const CARD_SIZES: CardSizePreference[] = ["small", "medium", "large"];

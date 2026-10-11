@@ -4,9 +4,7 @@
 // into the multi-namespace layout instead of collapsing to one file.
 /** @type {import('i18next-parser').UserConfig} */
 export default {
-  // Every locale `SUPPORTED_LNGS` ships, so an extraction run cannot silently
-  // skip a catalog. Keep in sync with `src/i18n/resources.ts`.
-  locales: ["en", "es", "fr", "de", "it", "pt", "pl", "ja", "zh"],
+  locales: ["en", "es", "fr", "de", "it", "pt"],
   defaultNamespace: "common",
   keySeparator: ".",
   nsSeparator: ":",
