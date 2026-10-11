@@ -1,5 +1,6 @@
 import type { GameFormat, TokenImageRef } from "../adapter/types";
 import { formatMetadata } from "../data/formatRegistry";
+import { activeCardArtSource, applyCardArtSource } from "./cardArtSource.ts";
 import type { CardImageSource, ImageRungs } from "./visualPacks/types.ts";
 
 /** How a face is printed, as emitted per face by `scripts/gen-scryfall-images.sh`. */
@@ -618,27 +619,37 @@ export function deriveImageUrl(url: string, size: ImageSize): string {
  * The trailing `?<timestamp>` is dropped: it is the *English* printing's
  * cache-buster and means nothing for a different Scryfall object. Omitting it
  * costs only the ability to notice a re-scan of that art.
+ *
+ * `chineseArt` selects the mtgch.com provider, which rewrites the host and the
+ * language path segment while keeping the printing id — see
+ * `services/cardArtSource.ts`. It runs FIRST and independently of
+ * `localeArtResolved`, because it is an explicit provider choice rather than a
+ * language-derived map: a player who turned Chinese art on must get it even when
+ * no locale map is installed, and `applyCardArtSource` hands back an `art_crop`
+ * URL untouched (mtgch publishes none), which is exactly the input the map
+ * lookup below still knows how to localize.
  */
-function localizeImageUrl(url: string): string {
-  if (!localeArtResolved) return url;
-  const parsed = splitSizedImageUrl(url);
-  if (!parsed) return url;
+function localizeImageUrl(url: string, chineseArt: boolean): string {
+  const sourced = chineseArt ? applyCardArtSource(url, "mtgch") : url;
+  if (!localeArtResolved) return sourced;
+  const parsed = splitSizedImageUrl(sourced);
+  if (!parsed) return sourced;
   // segments: [host, size, face, id[0], id[1], "<id>.jpg?<timestamp>"]
   const filename = parsed.segments[5];
   // A UUID contains no `.`, so the first dot always ends the id.
   const dot = filename.indexOf(".");
-  if (dot < 0) return url;
+  if (dot < 0) return sourced;
   const localized = localeArtResolved.map.get(filename.slice(0, dot));
-  if (!localized) return url;
+  if (!localized) return sourced;
   const faceIndex = parsed.segments[2] === "back" ? 1 : 0;
   const face = localized.faces[faceIndex] ?? localized.faces[0];
-  if (!face) return url;
+  if (!face) return sourced;
   const localizedUrl = parsed.size === "art_crop"
     ? face.art_crop
     : parsed.size === "small"
       ? face.small
       : face.normal;
-  return localizedUrl ?? url;
+  return localizedUrl ?? sourced;
 }
 
 /**
@@ -661,14 +672,23 @@ function localFaceImageUrl(
   // lookup), rather than in each caller. Size derivation and localization
   // commute — `deriveImageUrl` rewrites segment 1, `localizeImageUrl` rewrites
   // segments 3-5 — so the order below is immaterial.
+  //
+  // The art source is read once here rather than threaded from callers: this
+  // runs for every rendered card, and a store read per call site would put the
+  // same subscription in a dozen components. `activeCardArtSource` is module
+  // state owned by `services/cardArtSource.ts` — see the note there on why this
+  // module must not import the preferences store directly. The `useCardImage`
+  // cache key carries the same preference, so flipping it re-resolves every
+  // mounted tile rather than leaving stale art.
+  const chineseArt = activeCardArtSource() === "mtgch";
   if (size === "art_crop") {
-    return face.art_crop ? localizeImageUrl(face.art_crop) : undefined;
+    return face.art_crop ? localizeImageUrl(face.art_crop, chineseArt) : undefined;
   }
   if (size === "small") {
     const url = face.small ?? (face.normal ? deriveImageUrl(face.normal, "small") : undefined);
-    return url ? localizeImageUrl(url) : undefined;
+    return url ? localizeImageUrl(url, chineseArt) : undefined;
   }
-  return face.normal ? localizeImageUrl(face.normal) : undefined;
+  return face.normal ? localizeImageUrl(face.normal, chineseArt) : undefined;
 }
 
 export interface CardImageAsset {
