@@ -204,11 +204,14 @@ jobs:
           ./scripts/gen-card-data.sh
 
       - name: Save Simplified-Chinese card data
-        # `success()` is the correct "the archive is whole" gate: the generator
-        # may legitimately leave the directory absent (it is best-effort by
-        # design), and an entry saved from a run whose download failed would
-        # freeze a partial archive under a key later runs restore.
-        if: ${{ success() && steps.zhs-cache.outputs.cache-hit != 'true' }}
+        # `success()` alone is NOT sufficient here. gen-card-data.sh runs the
+        # Chinese generator best-effort (one flaky third-party download must not
+        # kill a card-data run whose MTGJSON half succeeded), so a failed
+        # download still exits 0 — and saving that directory would freeze a
+        # truncated archive under a key later runs restore, where it would fail
+        # `gzip -t` forever. Gate on the archive actually existing: hashFiles is
+        # empty when the download never produced one.
+        if: ${{ success() && steps.zhs-cache.outputs.cache-hit != 'true' && hashFiles('data/magic-cards-zhs/*.tar.gz') != '' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: data/magic-cards-zhs

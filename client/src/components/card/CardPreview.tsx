@@ -798,6 +798,7 @@ function CardPreviewInner({
     return (
       <MobilePreviewOverlay
         cardName={cardName}
+        displayName={shownName}
         art={activeArt}
         onDismiss={onDismiss ?? dismissPreview}
         layout={mobileLayout ?? "modal"}
@@ -900,12 +901,17 @@ function CardPreviewInner({
 /** Mobile/tablet: card anchored right (landscape) or center (portrait), whole card visible. */
 function MobilePreviewOverlay({
   cardName,
+  displayName,
   art,
   onDismiss,
   layout = "modal",
   report,
 }: {
   cardName: string;
+  /** The UI-language name the overlay PRINTS. `cardName` stays the canonical
+   *  English identity — it is the image `alt` and the art-lookup key, and a
+   *  localized value there would resolve no art at all. */
+  displayName: string;
   /** The parent's RESOLVED art state (marker / generic back / peek already
    *  applied). The overlay must never run its own lookup: a second
    *  `useCardImage` with raw `printed_ref` fields is exactly the mobile
@@ -968,7 +974,7 @@ function MobilePreviewOverlay({
           <CardBackFallback className="pointer-events-auto max-h-[60vh] max-w-[68vw] w-[68vw] rounded-xl border border-white/15 shadow-2xl" />
         ) : showArtFallback ? (
           <CardArtFallback
-            name={cardName}
+            name={displayName}
             className="pointer-events-auto aspect-[5/7] max-h-[60vh] max-w-[68vw] w-[68vw] rounded-xl border border-white/15 shadow-2xl"
           />
         ) : !src ? (
@@ -1012,7 +1018,7 @@ function MobilePreviewOverlay({
           <CardBackFallback className="aspect-[5/7] max-h-[calc(100dvh-2rem)] w-[68vw] max-w-full rounded-lg" />
         ) : showArtFallback ? (
           <CardArtFallback
-            name={cardName}
+            name={displayName}
             className="aspect-[5/7] max-h-[calc(100dvh-2rem)] w-[68vw] max-w-full rounded-lg"
           />
         ) : !src ? (

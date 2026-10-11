@@ -21,7 +21,7 @@
     "heading": "快速开始"
   },
   "shell": {
-    "disclaimer": "phase.rs 是一个非商业粉丝项目，与威世智（Wizards of the Coast）无关联，也未获其认可。Magic: The Gathering 版权归 Wizards of the Coast LLC 所有。卡牌图像在运行时从 Scryfall 获取；卡牌数据来自 MTGJSON。本项目不内置任何受威世智版权保护的素材。"
+    "disclaimer": "phase.rs 是一个非商业粉丝项目，与威世智（Wizards of the Coast）无关联，也未获其认可。Magic: The Gathering 是 Wizards of the Coast LLC 的 © 作品。卡牌图像在运行时从 Scryfall 获取，简体中文卡牌图像则从 mtgch.com 获取。卡牌数据来自 MTGJSON，简体中文卡牌文本来自 magic-cards-zhs 项目。本项目不内置任何受版权保护的 WotC 素材；完整的数据来源及授权信息请见“设置”。"
   },
   "home": {
     "resume": {

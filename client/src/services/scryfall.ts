@@ -427,7 +427,7 @@ export function resolvePrintingImageUrl(
   size: ImageSize,
 ): string | null {
   const face = printing.faces[faceIndex] ?? printing.faces[0];
-  const url = localFaceImageUrl(face, size) ?? null;
+  const url = localFaceImageUrlOnly(face, size) ?? null;
   return url && !isPlaceholderImageUrl(url) ? url : null;
 }
 
@@ -665,7 +665,7 @@ function localizeImageUrl(url: string, chineseArt: boolean): string {
 function localFaceImageUrl(
   face: ScryfallImageFace | undefined,
   size: ImageSize,
-): string | undefined {
+): { url: string; english: string } | undefined {
   if (!face) return undefined;
   // Localization is applied here, at the single funnel every stored-URL path
   // reaches (`resolveImageUrl`, `resolvePrintingImageUrl`, and the local token
@@ -681,14 +681,30 @@ function localFaceImageUrl(
   // cache key carries the same preference, so flipping it re-resolves every
   // mounted tile rather than leaving stale art.
   const chineseArt = activeCardArtSource() === "mtgch";
+  // `english` is the pre-localization URL. It is returned alongside the resolved
+  // one so the asset builder can offer it as a rung when the two differ — the
+  // provider swaps the host, so a failure on it has nothing else to fall back to.
+  const resolve = (english: string): { url: string; english: string } => ({
+    url: localizeImageUrl(english, chineseArt),
+    english,
+  });
   if (size === "art_crop") {
-    return face.art_crop ? localizeImageUrl(face.art_crop, chineseArt) : undefined;
+    return face.art_crop ? resolve(face.art_crop) : undefined;
   }
   if (size === "small") {
     const url = face.small ?? (face.normal ? deriveImageUrl(face.normal, "small") : undefined);
-    return url ? localizeImageUrl(url, chineseArt) : undefined;
+    return url ? resolve(url) : undefined;
   }
-  return face.normal ? localizeImageUrl(face.normal, chineseArt) : undefined;
+  return face.normal ? resolve(face.normal) : undefined;
+}
+
+/** The URL half of {@link localFaceImageUrl}'s result, for the callers that only
+ *  render a single image and have no ladder to feed. */
+function localFaceImageUrlOnly(
+  face: ScryfallImageFace | undefined,
+  size: ImageSize,
+): string | undefined {
+  return localFaceImageUrl(face, size)?.url;
 }
 
 export interface CardImageAsset {
@@ -696,6 +712,19 @@ export interface CardImageAsset {
   isRotated: boolean;
   source: CardImageSource;
   rungs?: ImageRungs;
+  /**
+   * Extra rungs for the consumer's source ladder, placed AFTER the primary
+   * source's own alternatives (an installed visual pack) but BEFORE the terminal
+   * no-art fallback.
+   *
+   * The Chinese art provider needs this: `applyCardArtSource` replaces a
+   * Scryfall URL with an mtgch one, and the consumer's ladder has no Scryfall
+   * counterpart to advance to — so one failure on that third-party host would
+   * skip the English art of the SAME printing and land on no-art. Carrying it
+   * here means it is built by `remoteImageSource` like every other rung rather
+   * than reconstructed by the consumer.
+   */
+  fallbackSources?: CardImageSource[];
   semantic: {
     oracleId?: string;
     englishPrintingId?: string;
@@ -957,10 +986,10 @@ export interface LocalSearchCardOverrides {
 
 function localFaceImageUris(face: ScryfallImageFace): Record<string, string> | undefined {
   const imageUris: Record<string, string> = {};
-  const artCrop = localFaceImageUrl(face, "art_crop");
-  const normal = localFaceImageUrl(face, "normal");
-  const small = localFaceImageUrl(face, "small");
-  const large = localFaceImageUrl(face, "large");
+  const artCrop = localFaceImageUrlOnly(face, "art_crop");
+  const normal = localFaceImageUrlOnly(face, "normal");
+  const small = localFaceImageUrlOnly(face, "small");
+  const large = localFaceImageUrlOnly(face, "large");
   if (artCrop) imageUris.art_crop = artCrop;
   if (normal) imageUris.normal = normal;
   if (small) imageUris.small = small;
@@ -1073,17 +1102,45 @@ export async function fetchCardImageAssetByOracleId(
   return resolveImageAssetWithPrintingFallback(entry, faceIndex, size, entry.name);
 }
 
+/**
+ * The extra rungs an asset should offer after its primary source: the English
+ * URL for the same printing, whenever localization moved the primary to a
+ * different host.
+ *
+ * Extracted and exported so the rule is directly testable. Left inline it was
+ * only reachable through `fetchCardImageAssetByOracleId`, whose test harness
+ * resets the module registry — which re-instantiates `cardArtSource`'s provider
+ * state and makes any stub of it invisible to the freshly imported `scryfall`.
+ * A pure function sidesteps that entirely.
+ *
+ * Returns an EMPTY array rather than undefined for "nothing to add", and never
+ * returns a rung equal to the primary: a ladder entry that repeats the source
+ * that just failed would be skipped by the consumer's own failed-URL set, so it
+ * would be dead weight that reads as a working fallback.
+ */
+export function providerCompletionSources(
+  primarySrc: string,
+  englishSrc: string,
+  size: ImageSize,
+): CardImageSource[] {
+  if (englishSrc === primarySrc) return [];
+  return [remoteImageSource(englishSrc, size).source];
+}
+
 function resolveImageAsset(
   entry: ScryfallDataEntry,
   faceIndex: number,
   size: ImageSize,
   diagnosticName: string,
 ): CardImageAsset {
-  const src = resolveImageUrl(entry, faceIndex, size, diagnosticName);
+  const resolved = resolveImageUrl(entry, faceIndex, size, diagnosticName);
+  const src = resolved.url;
   const remote = remoteImageSource(src, size);
+  const fallbackSources = providerCompletionSources(src, resolved.english, size);
   return {
     src,
     isRotated: isSidewaysFace(entry, faceIndex),
+    ...(fallbackSources.length > 0 ? { fallbackSources } : {}),
     ...remote,
     semantic: {
       oracleId: entry.oracle_id.toLowerCase(),
@@ -1136,13 +1193,13 @@ function resolveImageUrl(
   faceIndex: number,
   size: ImageSize,
   diagnosticName: string,
-): string {
+): { url: string; english: string } {
   const face = entry.faces[faceIndex] ?? entry.faces[0];
-  const url = localFaceImageUrl(face, size);
-  if (!url) {
+  const resolved = localFaceImageUrl(face, size);
+  if (!resolved) {
     throw new Error(`No ${size} image for "${diagnosticName}"`);
   }
-  return url;
+  return resolved;
 }
 
 const MANA_COLOR_TO_SCRYFALL: Record<string, string> = {
@@ -1276,7 +1333,7 @@ export async function fetchTokenImageAssetByRef(
     const faceIndex = ref.face_name
       ? Math.max(0, idEntry.face_names.indexOf(ref.face_name.toLowerCase()))
       : 0;
-    return { src: resolveImageUrl(idEntry, faceIndex, size, idEntry.name), faceIndex };
+    return { src: resolveImageUrl(idEntry, faceIndex, size, idEntry.name).url, faceIndex };
   }
 
   if (ref.scryfall_oracle_id) {
@@ -1286,7 +1343,7 @@ export async function fetchTokenImageAssetByRef(
       const faceIndex = ref.face_name
         ? Math.max(0, oracleEntry.face_names.indexOf(ref.face_name.toLowerCase()))
         : 0;
-      return { src: resolveImageUrl(oracleEntry, faceIndex, size, oracleEntry.name), faceIndex };
+      return { src: resolveImageUrl(oracleEntry, faceIndex, size, oracleEntry.name).url, faceIndex };
     }
   }
 
@@ -1315,7 +1372,7 @@ async function fetchTokenImageFromLocal(
   // stored blue one. On any mismatch, fall through to the remote ladder.
   if (filters && !tokenLocalEntryMatches(entry, filters)) return null;
   const face = entry.faces[0];
-  return localFaceImageUrl(face, size) ?? null;
+  return localFaceImageUrlOnly(face, size) ?? null;
 }
 
 /**

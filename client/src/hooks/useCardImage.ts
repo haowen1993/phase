@@ -1167,7 +1167,16 @@ export function useCardImage(
             allowRemote: true,
             remote: { src: imageAsset.src, rungs: imageAsset.rungs },
           });
-          const viable = result.sources.filter((source) =>
+          // The asset's own fallbacks (the English URL for a provider-rewritten
+          // one) slot in AFTER the repository's sources — so an installed visual
+          // pack still outranks them — but BEFORE the terminal no-art entry,
+          // which must stay last. Without them a provider-rewritten URL has no
+          // next rung at all and a single CDN failure reaches no-art while the
+          // English art for the same printing sits unused.
+          const viable = [
+            ...result.sources,
+            ...(imageAsset.fallbackSources ?? []),
+          ].filter((source) =>
             source.src === null || !failedSources.current.values.has(source.src));
           publish(viable.length > 0 ? viable : fallback, imageAsset);
         } catch {

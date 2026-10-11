@@ -34,40 +34,54 @@ ARCHIVE_URL="${MAGIC_CARDS_ZHS_URL:-https://github.com/HeliumOctahelide/magic-ca
 CACHE_DIR="${MAGIC_CARDS_ZHS_CACHE_DIR:-data/magic-cards-zhs}"
 ARCHIVE="$CACHE_DIR/$ASSET_NAME"
 SOURCE_MEMBER="zhs_oracle.json"
-EXTRACTED="$CACHE_DIR/$SOURCE_MEMBER"
 OUTPUT="${MAGIC_CARDS_ZHS_OUTPUT:-client/public/card-data.zh.json}"
 
 echo "=== Simplified Chinese Card Data Generation ($RELEASE_TAG) ==="
 
 mkdir -p "$CACHE_DIR"
 
-if [ ! -f "$EXTRACTED" ]; then
-  if [ ! -f "$ARCHIVE" ]; then
-    echo "Downloading $ASSET_NAME..."
-    # --http1.1: GitHub's HTTP/2 edge aborts this particular asset mid-transfer
-    # with PROTOCOL_ERROR often enough to matter; --retry-all-errors covers the
-    # remaining resets. The download is resumable, so a partial file is kept.
-    curl --fail --http1.1 --retry 5 --retry-all-errors --retry-delay 3 \
-      --connect-timeout 30 -L -C - \
-      -H 'User-Agent: phase-rs-card-data/1.0 (+https://github.com/phase-rs/phase)' \
-      -o "$ARCHIVE" "$ARCHIVE_URL"
-    echo "  downloaded $(du -h "$ARCHIVE" | cut -f1)"
-  fi
-
-  # Fail loudly on a truncated or corrupt archive rather than letting tar emit a
-  # partial JSONL that the builder would then read as a short-but-valid export.
-  if ! gzip -t "$ARCHIVE"; then
-    echo "ERROR: $ARCHIVE is not a valid gzip archive (truncated download?)." >&2
-    echo "  Delete it and re-run to retry." >&2
-    exit 1
-  fi
-
-  echo "Extracting $SOURCE_MEMBER..."
-  tar -xzf "$ARCHIVE" -C "$CACHE_DIR" "./$SOURCE_MEMBER"
+# Only the ARCHIVE is cached. The extracted member is deliberately re-derived on
+# every run from a scratch directory rather than being kept beside it: an
+# existence-gated extracted file cannot tell one release from another, so a
+# pinned-tag bump (or a workflow restoring an older cache under a fallback key)
+# would keep rebuilding the sidecar from stale data forever. Re-extracting one
+# tar member costs a second; getting the vintage wrong costs a silent, permanent
+# wrong answer. The archive name carries the tag, so its existence IS a
+# release-scoped fact.
+if [ ! -f "$ARCHIVE" ]; then
+  echo "Downloading $ASSET_NAME..."
+  # --http1.1: GitHub's HTTP/2 edge aborts this particular asset mid-transfer
+  # with PROTOCOL_ERROR often enough to matter; --retry-all-errors covers the
+  # remaining resets. The download is resumable, so a partial file is kept.
+  curl --fail --http1.1 --retry 5 --retry-all-errors --retry-delay 3 \
+    --connect-timeout 30 -L -C - \
+    -H 'User-Agent: phase-rs-card-data/1.0 (+https://github.com/phase-rs/phase)' \
+    -o "$ARCHIVE" "$ARCHIVE_URL"
+  echo "  downloaded $(du -h "$ARCHIVE" | cut -f1)"
 fi
 
+# Fail loudly on a truncated or corrupt archive rather than letting tar emit a
+# partial JSONL that the builder would then read as a short-but-valid export.
+# Deleting it matters: a resume would otherwise keep appending to a file whose
+# prefix is already wrong.
+if ! gzip -t "$ARCHIVE"; then
+  echo "ERROR: $ARCHIVE is not a valid gzip archive (truncated download?)." >&2
+  rm -f "$ARCHIVE"
+  echo "  Removed it; re-run to download again." >&2
+  exit 1
+fi
+
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+EXTRACTED="$WORK_DIR/$SOURCE_MEMBER"
+
+echo "Extracting $SOURCE_MEMBER..."
+# The member path inside the archive is top-level (`./zhs_oracle.json`), so
+# --strip-components has nothing to strip.
+tar -xzf "$ARCHIVE" -C "$WORK_DIR" "./$SOURCE_MEMBER"
+
 if [ ! -s "$EXTRACTED" ]; then
-  echo "ERROR: $EXTRACTED is missing or empty." >&2
+  echo "ERROR: $SOURCE_MEMBER is missing or empty after extraction." >&2
   exit 1
 fi
 
