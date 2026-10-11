@@ -28,11 +28,11 @@ FALLBACK_MARKER="$OUTPUT_DIR/scryfall-images.$SCHEMA_VERSION.fallback.json"
 # `zh` covers the printings Wizards actually produced in Simplified Chinese. That
 # run ended at Bloomburrow (official announcement, 2024-02-23), so no set from
 # 2024-08 onward carries any Chinese in MTGJSON's foreignData or at Scryfall —
-# measured, not assumed: 2025 and 2026 sets are 0%. Chinese is therefore complete
-# for everything printed through mid-2024 and empty after it. Traditional
-# (`Chinese Traditional`, 14,395 records) is deliberately NOT mapped: no
-# Traditional UI catalog ships, so its chrome would stay English over Chinese
-# cards.
+# measured, not assumed: 2025 and 2026 sets are 0%. The same-card fallback can
+# reuse available historical Chinese artwork for later English printings;
+# cards without a Chinese printing retain English artwork. Traditional
+# (`Chinese Traditional`) is deliberately NOT mapped: no Traditional UI
+# catalog ships, so its chrome would stay English over Chinese cards.
 LOCALE_MAP='{
   "German": "de",
   "Spanish": "es",
