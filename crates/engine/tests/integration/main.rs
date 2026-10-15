@@ -1990,4 +1990,5 @@ mod declared_player_object_controller;
 mod decline_branch_not_graveyard_rider;
 mod exile_origin_target_acquisition;
 mod keyword_activation_cancel;
+mod starting_intensity_keyword;
 mod tidebinder_source_type_gate;
