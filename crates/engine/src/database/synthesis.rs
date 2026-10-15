@@ -22512,8 +22512,6 @@ mod bloodthirst_synthesis_tests {
     /// assertion fails with `[StartingIntensity(2)]`.
     #[test]
     fn starting_intensity_face_synthesis_keeps_unrelated_unknown_kind_keywords() {
-        use crate::database::mtgjson::AtomicIdentifiers;
-
         // Verbatim `Ribald Shanty` Oracle text (YLCI), the card the arm exists for.
         const RIBALD_SHANTY: &str = "Starting intensity 2\n\
             Ribald Shanty deals damage equal to its intensity to target creature or planeswalker.\n\
@@ -22543,7 +22541,7 @@ mod bloodthirst_synthesis_tests {
             printings: Vec::new(),
             rulings: Vec::new(),
             is_game_changer: false,
-            identifiers: AtomicIdentifiers {
+            identifiers: crate::database::mtgjson::AtomicIdentifiers {
                 scryfall_oracle_id: None,
                 scryfall_id: None,
             },
