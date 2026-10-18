@@ -8206,24 +8206,115 @@ pub(crate) fn extract_bounded_target_multi_target(text: &str) -> Option<MultiTar
     None
 }
 
-/// CR 115.1d: Recover "up to N target …" from imperative text where the verb
-/// precedes the count phrase — "tap up to four target permanents" (Elder
-/// Deep-Fiend). The targeted-action parser strips the count via
-/// `strip_optional_target_prefix` but does not attach `MultiTargetSpec`.
-pub(crate) fn extract_optional_target_multi_target(text: &str) -> Option<MultiTargetSpec> {
-    let lower = text.to_lowercase();
-    for verb in MULTI_TARGET_VERBS {
-        let Ok((after_verb, _)) =
-            terminated(tag::<_, _, OracleError<'_>>(*verb), tag(" ")).parse(lower.as_str())
-        else {
-            continue;
-        };
-        let (_, multi_target) = strip_optional_target_prefix(after_verb);
-        if multi_target.is_some() {
-            return multi_target;
-        }
+/// CR 115.1 + CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d: Detect a clause
+/// whose printed "up to N target …" / "any number of target …" quantifier
+/// governs the clause's FIRST target phrase, wherever that phrase sits. The
+/// spell/ability still requires targets (CR 115.6) while allowing zero to be
+/// chosen, so the recovered `MultiTargetSpec` has a fixed minimum of zero.
+///
+/// Detection is a two-offset match over masked, lowercased text:
+/// - P1 first-target-phrase: the first word-boundary occurrence of a target
+///   article (`target ` / `other target ` / `another target `) is at byte
+///   offset `first_target`.
+/// - P2 quantifier governs that phrase: `strip_optional_target_prefix` — the
+///   single authority for the optional-count vocabulary — matches at a word
+///   boundary, and the article it leaves behind starts at the SAME offset. A
+///   quantifier that governs anything else (a resource count, a later
+///   conjunct, an earlier mandatory phrase, a quoted granted ability) therefore
+///   declines.
+///
+/// Both scans use `nom_primitives::scan_preceded`; double-quoted spans are
+/// masked first with `nom_primitives::mask_double_quoted_spans_preserving_len`
+/// (byte-length preserving, so the offsets stay valid). An unterminated quote
+/// passes the remainder through unchanged — a malformed quoted "up to one
+/// target" is accepted as visible text; no corpus card has one.
+///
+/// P3 capacity: `Effect::Counter { .. }` declines. `Effect::Counter` has no
+/// field for the announced count, so "counter up to N target …" cannot carry
+/// the spec (Double Negative, Katara's Reversal, Repel Intruders, Repulsive
+/// Mutation, Tishana's Tidebinder).
+/// P4 operand split: `Effect::Attach { .. }` declines. An Attach prints a
+/// target phrase for its HOST operand and/or its ATTACHMENT operand; the host
+/// frame is captured separately by the typed host capture in `imperative.rs`,
+/// and writing the host's "up to one" into `clause.multi_target` would bind the
+/// wrong operand.
+///
+/// The write-side guards (no existing authority, announced non-context target)
+/// live in [`apply_optional_target_fixup`], the single clause-level caller. The
+/// compound producers that discard a sub-clause's spec (damage-compound copy,
+/// damage-chain segment, compound-shuffle operand) call this detector directly
+/// on the sub-clause text.
+pub(crate) fn extract_optional_target_multi_target(
+    text: &str,
+    effect: &Effect,
+) -> Option<MultiTargetSpec> {
+    if matches!(effect, Effect::Counter { .. } | Effect::Attach { .. }) {
+        return None;
     }
-    None
+    let masked = nom_primitives::mask_double_quoted_spans_preserving_len(text);
+    let lower = masked.to_ascii_lowercase();
+    let (before, (), _) = nom_primitives::scan_preceded(lower.as_str(), |input| {
+        value(
+            (),
+            alt((
+                tag::<_, _, OracleError<'_>>("target "),
+                tag("other target "),
+                tag("another target "),
+            )),
+        )
+        .parse(input)
+    })?;
+    let first_target = before.len();
+    let (_, spec, rest) =
+        nom_primitives::scan_preceded(lower.as_str(), |input| match strip_optional_target_prefix(
+            input,
+        ) {
+            (rest, Some(spec)) => Ok((rest, spec)),
+            _ => Err(oracle_err(input)),
+        })?;
+    (lower.len() - rest.len() == first_target).then_some(spec)
+}
+
+/// CR 115.1 + CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d: The single
+/// clause-level owner of the optional target-count fixup.
+///
+/// Called only from `lower_clause_ast` — the `Imperative` arm, the
+/// `SubjectPredicate` arm (with `original_clause`, the text this clause was
+/// asked to lower), and the recursive `Conditional` body — after the clause's
+/// own effect lowering has settled. The clause fragment, not the enclosing
+/// chunk, is authoritative here: every sticky multi-sentence chunk the chunker
+/// can produce is claimed by an earlier parser before the generic tail, so the
+/// chunk this fixup owns is single-sentence on every measured route.
+///
+/// Guards:
+/// - P5 write gate: an existing `multi_target` is never overridden. Typed specs
+///   set by the clause's own parser (e.g. the distribution family's finite
+///   `{0,3}`) and the `refine_put_at_library_position` spec both win.
+/// - The effect must surface an announced target: `Effect::target_filter()` is
+///   `Some` and is not a context reference. A SelfRef/`ParentTarget` body has
+///   no target phrase the quantifier could govern.
+/// - `extract_optional_target_multi_target` declines the Counter (CR 115.1 +
+///   CR 115.6: `Effect::Counter` cannot carry the announced count) and Attach
+///   (operand split) classes.
+///
+/// This function never writes `optional_targeting`; that flag belongs to the
+/// Attach HOST frame captured in `imperative.rs`, and non-Attach clauses are
+/// already optional through the min-0 `multi_target`
+/// (`ResolvedAbility::targeting_is_optional`, CR 601.2c).
+pub(crate) fn apply_optional_target_fixup(clause: &mut ParsedEffectClause, clause_text: &str) {
+    if clause.multi_target.is_some() {
+        return;
+    }
+    let Some(filter) = clause.effect.target_filter() else {
+        return;
+    };
+    if filter.is_context_ref() {
+        return;
+    }
+    let Some(spec) = extract_optional_target_multi_target(clause_text, &clause.effect) else {
+        return;
+    };
+    clause.multi_target = Some(spec);
 }
 
 /// CR 115.1d: Recover "verb up to N <filter>" when the phrase omits the word
@@ -9565,6 +9656,7 @@ pub(super) fn try_parse_distribute_damage(lower: &str, text: &str) -> Option<Par
     let (target, _) = parse_target(stripped_target_text);
 
     Some(ParsedEffectClause {
+        optional_targeting: false,
         unlowered_guard: None,
         effect: Effect::DealDamage {
             amount,
@@ -9651,6 +9743,7 @@ pub(super) fn try_parse_distribute_counters(lower: &str, text: &str) -> Option<P
 
     let counter_name = counter_type.as_str().into_owned();
     Some(ParsedEffectClause {
+        optional_targeting: false,
         unlowered_guard: None,
         effect: Effect::PutCounter {
             counter_type,
@@ -9721,6 +9814,7 @@ pub(super) fn try_parse_prevent_distribute(text: &str) -> Option<ParsedEffectCla
     };
 
     Some(ParsedEffectClause {
+        optional_targeting: false,
         unlowered_guard: None,
         effect: Effect::PreventDamage {
             amount,
@@ -9839,6 +9933,7 @@ pub(super) fn try_parse_bidirectional_prevent(
     by_ability.sub_link = SubAbilityLink::SequentialSibling;
 
     Some(ParsedEffectClause {
+        optional_targeting: false,
         unlowered_guard: None,
         effect: to_effect,
         duration: None,
@@ -14488,8 +14583,16 @@ mod tests {
     #[test]
     fn extract_optional_target_multi_target_recovers_tap_up_to_four() {
         use crate::types::ability::MultiTargetSpec;
-        let spec = super::extract_optional_target_multi_target("tap up to four target permanents")
-            .expect("Elder Deep-Fiend cast trigger shape");
+        let effect = Effect::SetTapState {
+            target: TargetFilter::Any,
+            scope: EffectScope::Single,
+            state: crate::types::ability::TapStateChange::Tap,
+        };
+        let spec = super::extract_optional_target_multi_target(
+            "tap up to four target permanents",
+            &effect,
+        )
+        .expect("Elder Deep-Fiend cast trigger shape");
         assert_eq!(
             spec,
             MultiTargetSpec::up_to(QuantityExpr::Fixed { value: 4 })

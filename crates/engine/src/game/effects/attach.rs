@@ -269,6 +269,42 @@ fn resolve_bound_attachment_operation(
         return Ok(AttachResolutionOutcome::Completed);
     }
 
+    // CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d + CR 608.2c: a printed
+    // "attach … to up to one target creature …" makes the HOST optional — zero
+    // targets may be chosen while the ability remains targeted and still
+    // resolves. An announced host slot is bound before this resolver runs
+    // (CR 601.2c for spells, CR 602.2b for activated abilities, CR 603.3d for
+    // triggered abilities), so arriving here with NO host binding means the
+    // controller chose none: the instruction is followed in order and does
+    // nothing (CR 608.2c). The ability itself resolved, so emit the resolution
+    // event and complete rather than surfacing a missing-operand error.
+    //
+    // Gate on an OBJECT host population. `attach_host_target()` only ever binds
+    // object hosts, so a player-host Attach (no corpus card prints one) must not
+    // be silently skipped, and a context-ref/scan host needs no announced slot —
+    // its absence stays the missing-operand error below, unchanged.
+    // CR 115.6 + CR 601.2c: a declined optional host leaves the announced
+    // object-target list empty; if any object target was announced, the host was
+    // chosen (or the binding was lost downstream — a separate pre-existing chain
+    // defect), so keep the existing resolution path rather than turning an error
+    // into a silent no-op.
+    if ability.optional_targeting
+        && ability.attach_host_target().is_none()
+        && !ability
+            .targets
+            .iter()
+            .any(|target| matches!(target, TargetRef::Object(_)))
+        && crate::game::ability_utils::attach_host_filter_needs_target_slot(target_filter)
+        && target_filter.denotes_battlefield_objects()
+    {
+        events.push(GameEvent::EffectResolved {
+            kind: EffectKind::from(&ability.effect),
+            source_id,
+            subject: None,
+        });
+        return Ok(AttachResolutionOutcome::Completed);
+    }
+
     // CR 608.2h + CR 608.2k: Typed attachment operands resolve from the
     // battlefield/LKI unless they are explicit player-chosen targets.
     // Typed/scan-based attachment filters (e.g. "Equipment attached to ~") resolve

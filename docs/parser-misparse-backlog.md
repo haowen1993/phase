@@ -1,10 +1,10 @@
 # Phase Engine Parser Misparse — Global Root-Cause Taxonomy
 
-Consolidated from 50 per-batch clustering passes over the whole card database. Synonymous per-batch clusters were merged into canonical root causes, their card lists unioned and deduped, and ranked by total card appearances (largest first).
+Consolidated from 50 per-batch clustering passes over the whole card database. Synonymous per-batch clusters were merged into canonical root causes, their card lists unioned and deduped. The `#` column is a **stable root-cause identifier, not a rank**: identifiers are never renumbered and the table is not re-sorted when counts move (e.g. #20 precedes #19, and IDs 22/29 are absent while 31 exists).
 
 - **Canonical root causes:** 29
-- **Distinct cards implicated:** 4549
-- **Total card appearances across root causes:** 4582 (a card may appear under more than one root cause when it exhibits multiple distinct misparses)
+- **Distinct cards implicated:** 4544
+- **Total card appearances across root causes:** 4577 (a card may appear under more than one root cause when it exhibits multiple distinct misparses)
 
 > Counting method: both figures count the per-root-cause card bullets only — the
 > three metadata bullets above are excluded — and are the source of truth.
@@ -29,7 +29,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 | 12 | Modal 'choose one/N' parsed as independent abilities | 132 | oracle.rs modal dispatch — detect 'Choose one —' header, wrap modes in Effect::ChooseOneOf |
 | 13 | State/game-state condition → StaticCondition::Unrecognized | 128 | oracle_nom/condition.rs parse_inner_condition — add typed variant for the predicate class |
 | 14 | Granted/quoted ability or continuous modification dropped | 94 | oracle_static.rs continuous-modification extraction — emit all conjuncts incl. GrantAbility/GrantKeyword |
-| 15 | Multi-target / 'up to N' optionality or count dropped | 83 | oracle_target.rs strip_optional_target_prefix — preserve MultiTargetSpec and optional_targeting |
+| 15 | Multi-target / 'up to N' optionality or count dropped | 78 | parser/oracle_effect/lower.rs `apply_optional_target_fixup` — preserve MultiTargetSpec / optional_targeting (Attach host: `imperative.rs` capture) |
 | 16 | Keyword payload / multiplicity / mis-tokenization | 83 | game/keywords.rs + oracle keyword parsing — use typed discriminants and guard ability-word labels |
 | 17 | Copy 'except' / additional-modification clause dropped | 81 | oracle parser copy handling — populate BecomeCopy/CopyTokenOf additional_modifications from the except-list (CR 707.2) |
 | 18 | Subtype / type-change modification malformed or dropped | 78 | oracle_util.rs SUBTYPES + parse_enchanted_is_type — register subtypes and emit full type-change set |
@@ -45,7 +45,7 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 | 30 | Token/named-card name corrupted by normalization or overrun | 7 | oracle_util.rs SELF_REF normalization + Named-filter parsing — guard literal 'named X' spans |
 | 31 | Other / uncategorized misparse | 4 | manual triage |
 
-> The top **5** root causes cover 2424/4582 ≈ 53% of all misparse appearances; the top 10 cover 3413/4582 ≈ 74%. Fix these first.
+> The top **5** root causes cover 2424/4577 ≈ 53% of all misparse appearances; the top 10 cover 3413/4577 ≈ 75%. Fix these first.
 
 ## Full card lists per root cause
 
@@ -4145,11 +4145,16 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 
 </details>
 
-### 15. Multi-target / 'up to N' optionality or count dropped  (83 cards)
+### 15. Multi-target / 'up to N' optionality or count dropped  (78 cards)
 
 **Signature.** MultiTargetSpec / 'up to one/two target' optionality dropped to a mandatory single Typed target (or collapsed into DamageAll), losing the multi_target / up_to slot and per-target distinctness.
 
-**Fix hint.** oracle_target.rs strip_optional_target_prefix — preserve MultiTargetSpec and optional_targeting
+**Fix hint.** parser/oracle_effect/lower.rs `apply_optional_target_fixup` — preserve MultiTargetSpec / optional_targeting (Attach host: `imperative.rs` capture)
+
+**Status (2026-10-18).** Partially closed by the clause-level optional-count fixup. Residual classes: `Effect::Counter`
+cannot represent "counter up to N targets"; attachment-operand optionality and the Attach per-operand minimum are
+separate follow-ups; cards whose clauses remain unsupported stay listed; Capricious Efreet (mandatory first
+target), Time Spiral (no "target"), and Kaya, Ghost Assassin (SelfRef head) are outside the detector's class.
 
 <details><summary>Cards</summary>
 
@@ -4173,15 +4178,12 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Clattering Augur
 - Cleansing Meditation
 - Comet Storm
-- Conduct Electricity
 - Conjurer's Bauble
 - Fire Juggler
 - Flame Sweep
-- Gold Rush
 - Gravegouger
 - Griffnaut Tracker
 - Grime Gorger
-- Here Comes a New Hero!
 - Hundred-Handed One
 - Hunter's Bow
 - Impractical Joke
@@ -4207,8 +4209,6 @@ This is the prioritized "fix N root causes → unlock M cards" backlog: the top 
 - Put Away
 - Raff, Weatherlight Stalwart
 - Raiding Party
-- Rakdos Firewheeler
-- Razorgrass Invoker
 - Rebuking Ceremony
 - Reconstruct History
 - Redeem

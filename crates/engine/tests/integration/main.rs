@@ -1135,6 +1135,7 @@ mod loop_only_dependency_fallback;
 mod lost_monarch_combat_damage_by_type_intervening_if;
 mod louisoix_sacrifice_counter;
 mod lurking_predators_1604_repro;
+mod luxior_ignited_zero_target_attach;
 mod m_odo_the_gnarled_oracle_activation;
 mod machine_gods_effigy_copy_exception;
 mod madame_null_integration;

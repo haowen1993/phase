@@ -6992,6 +6992,10 @@ pub(super) fn parse_utility_imperative_ast(
                 target,
                 multi_target,
                 selection,
+                // The attachment here is a DESCRIBED filter; the recipient text
+                // is the host but this arm's quantifier belongs to the
+                // attachment, so no host-optional flag is claimed (CR 115.6).
+                host_optional: false,
             });
         }
     }
@@ -7008,6 +7012,7 @@ pub(super) fn parse_utility_imperative_ast(
                 selection: AttachSelection::AtResolution {
                     count: AttachCardinality::One,
                 },
+                host_optional: false,
             });
         }
     }
@@ -7049,6 +7054,17 @@ pub(super) fn parse_utility_imperative_ast(
             let (attachment, _attachment_rem) = parse_attachment_anaphor(&attachment_text, ctx);
             let (target, _target_rem) =
                 parse_attach_recipient(&target_text, ctx, Some(&attachment));
+            // CR 115.6: capture the HOST operand's optionality here, where the
+            // typed host phrase and the attachment operand's printed role are both
+            // in scope. When the ATTACHMENT operand itself claims an announced
+            // slot, its printed quantifier is not the host's — decline.
+            let host_optional =
+                !crate::game::ability_utils::attach_attachment_claims_announcement_slot(
+                    &attachment,
+                    &selection,
+                ) && super::strip_optional_target_prefix(target_text.trim())
+                    .1
+                    .is_some();
             #[cfg(debug_assertions)]
             assert_no_compound_remainder(_attachment_rem, text);
             #[cfg(debug_assertions)]
@@ -7058,6 +7074,7 @@ pub(super) fn parse_utility_imperative_ast(
                 target,
                 multi_target,
                 selection,
+                host_optional,
             });
         }
     }
@@ -7078,6 +7095,7 @@ pub(super) fn parse_utility_imperative_ast(
             selection: AttachSelection::AtResolution {
                 count: AttachCardinality::One,
             },
+            host_optional: false,
         });
     }
     None
@@ -9980,6 +9998,7 @@ pub(super) fn with_shuffle_sub_ability(mut effect: Effect) -> ParsedEffectClause
         });
     }
     ParsedEffectClause {
+        optional_targeting: false,
         unlowered_guard: None,
         effect,
         duration: None,
@@ -15536,6 +15555,7 @@ pub(super) fn lower_imperative_family_ast(ast: ImperativeFamilyAst) -> ParsedEff
             target,
             multi_target,
             selection,
+            host_optional,
         })) => {
             // CR 115.1a/c/d/e + CR 608.2d: `clause.multi_target` stays the
             // ANNOUNCED target-count spec. It is already empty for a described
@@ -15552,6 +15572,12 @@ pub(super) fn lower_imperative_family_ast(ast: ImperativeFamilyAst) -> ParsedEff
                 selection,
             });
             clause.multi_target = multi_target;
+            // CR 115.6: the Attach HOST frame's printed "up to one target …".
+            // This is the ONLY writer of `optional_targeting` in the parser; the
+            // generalized clause-count detector never touches it. Gated by the
+            // host capture, which declines when the ATTACHMENT operand claims an
+            // announced slot (Barret, Avalanche Leader / Thorin, Mountain-King).
+            clause.optional_targeting = host_optional;
             clause
         }
         ImperativeFamilyAst::Structured(ImperativeAst::Utility(
