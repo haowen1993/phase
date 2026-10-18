@@ -22512,6 +22512,10 @@ fn try_split_targeted_compound(text: &str, ctx: &mut ParseContext) -> Option<Par
     // CR 115.6: Propagate "up to N" cardinality so the sub-clause target
     // remains optional (e.g. "up to one other target artifact or enchantment").
     sub_ability.multi_target = sub_clause.multi_target;
+    // CR 115.6: thread the clause's declared zero-target authority too — a
+    // rebuilt link starts clean, so an Attach host frame captured on the
+    // sub-clause would otherwise be dropped here.
+    sub_ability.optional_targeting = sub_clause.optional_targeting;
     // CR 119.3 + CR 109.5: Install the iterating player scope lifted from an
     // "each of your opponents" subject conjunct so the resolver iterates each
     // opponent and the inner effect drains the scoped player (not the source's
@@ -24139,10 +24143,19 @@ fn try_split_damage_compound(text: &str, ctx: &mut ParseContext) -> Option<Parse
     // CR 115.1 + CR 115.6 + CR 601.2c: the continuation's own announced target
     // count. `parse_effect_clause` already ran the clause fixup and put the spec
     // on the sub-CLAUSE, but `AbilityDefinition::new` starts clean — copy it, or
-    // "2 damage to up to one target creature or planeswalker" (Rakdos
-    // Firewheeler, Burning Sun's Avatar, Conduct Electricity) resolves as one
-    // mandatory target.
-    sub_ability.multi_target = sub_clause.multi_target;
+    // any non-excluded continuation ("up to one other target artifact or
+    // enchantment") resolves as one mandatory target. `Effect::DealDamage` is
+    // excluded at the detector, but the sub-clause can still carry a spec from
+    // the pre-existing "up to N" damage channel; copying THAT here would
+    // reintroduce the declined-damage-segment defect the exclusion exists to
+    // prevent, so the copy is gated on the same exclusion.
+    if !matches!(sub_ability.effect.as_ref(), Effect::DealDamage { .. }) {
+        sub_ability.multi_target = sub_clause.multi_target;
+    }
+    // CR 115.6: thread the declared zero-target authority as well — a rebuilt
+    // link starts clean, so a future Attach host frame on the sub-clause would
+    // otherwise be dropped here.
+    sub_ability.optional_targeting = sub_clause.optional_targeting;
 
     Some(ParsedEffectClause {
         optional_targeting: false,

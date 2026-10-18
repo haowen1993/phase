@@ -8230,11 +8230,10 @@ pub(crate) fn extract_bounded_target_multi_target(text: &str) -> Option<MultiTar
 /// target" is accepted as visible text; no corpus card has one.
 ///
 /// Capacity exclusions: `Counter`, `Attach`, `CopySpell`, `BecomeCopy`,
-/// `MoveCounters` and `Token` decline. These effects have no representation for
-/// a declined optional target yet (the resolver errors or silently does nothing
-/// / the token host is treated as named), so keep base behavior until the
-/// effect grows the capability: Counter, Attach, CopySpell, BecomeCopy,
-/// MoveCounters, Token.
+/// `DealDamage`, `MoveCounters`, `Token` and `Transform` decline. These effects
+/// have no safe representation for a declined optional target yet (the resolver
+/// errors, acts on the wrong object, or a later stage drops the spec), so keep
+/// base behavior until the effect grows the capability.
 /// - `Counter` has no field for the announced count, so "counter up to N
 ///   target …" cannot carry the spec (Double Negative, Katara's Reversal, Repel
 ///   Intruders, Repulsive Mutation, Tishana's Tidebinder).
@@ -8247,6 +8246,17 @@ pub(crate) fn extract_bounded_target_multi_target(text: &str) -> Option<MultiTar
 ///   of the stack instead (Display of Power).
 /// - `BecomeCopy` errors `MissingParam` on a declined copy source (Fleeting
 ///   Reflection).
+/// - `DealDamage` is one segment of a damage COMPOUND ("2 damage to target
+///   opponent and 2 damage to up to one target creature or planeswalker" —
+///   Rakdos Firewheeler, Burning Sun's Avatar, Ravager of the Fells, Dragonspark
+///   Reactor, Chandra, Pyromaster, Soul of Shandalar, Trick Shot, Conduct
+///   Electricity). CR 115.6 + CR 601.2c: zero chosen targets is legal for the
+///   segment, but the chain walker then INHERITS the parent's player target:
+///   `inherited_parent_occurrences` gates only object targets on
+///   `has_independent_target_slot`, so the declined "creature or planeswalker"
+///   segment becomes the first segment's "target opponent" and the spell deals
+///   damage to that player. Follow-up: gate the `TargetRef::Player(_)` arm on
+///   `!has_independent_target_slot` too, then lift the exclusion.
 /// - `MoveCounters` reads only `ability.optional_targeting` in its engine arms,
 ///   so the stamped spec would be dropped and a declined target still demanded
 ///   (Heroic Sacrifice; Donatello, Mutant Mechanic; Graft Surgeon; Host of the
@@ -8254,11 +8264,22 @@ pub(crate) fn extract_bounded_target_multi_target(text: &str) -> Option<MultiTar
 /// - `Token` treats a declined `attach_to` host as named and creates no token
 ///   (Cut In; Eriette's Whisper; Gadwick's First Duel; Living Lectern; Shatter
 ///   the Oath; Twisted Fealty; Witch's Mark).
+/// - `Transform` cannot tell a declined DECLARED target from its printed
+///   no-target self-transform: `transform_effect::resolve` maps an empty subject
+///   list to `ability.source_id` (`[] => source_id`), so "Transform up to one
+///   target Werewolf you control" (Waxing Moon) transforms the SOURCE on a
+///   decline and the error aborts the rest of the chain, losing the trample
+///   sibling. Follow-up: `transform_effect::resolve` must no-op on a declined
+///   declared optional target instead of falling through to `source_id`, then
+///   lift the exclusion.
 ///
 /// Follow-ups (the reason each exclusion is temporary): the engine's
-/// `MoveCounters` and `BecomeCopy` arms must move to `targeting_is_optional()`;
+/// `MoveCounters` arms must move to `targeting_is_optional()`; `become_copy.rs`
+/// already honours `multi_target` in its slot path, but its resolver needs an
+/// explicit empty-source no-op instead of `MissingParam` (`become_copy.rs:64-74`);
 /// `token.rs`'s host-request derivation must treat a declined optional host as
-/// `NotRequested`; `copy_spell.rs` needs an explicit zero-target decline.
+/// `NotRequested`; `copy_spell.rs` needs an explicit zero-target decline; and the
+/// `DealDamage` / `Transform` follow-ups named above.
 ///
 /// The write-side guards (no existing authority, announced non-context target)
 /// live in [`apply_optional_target_fixup`], the single clause-level caller. The
@@ -8275,8 +8296,10 @@ pub(crate) fn extract_optional_target_multi_target(
             | Effect::Attach { .. }
             | Effect::CopySpell { .. }
             | Effect::BecomeCopy { .. }
+            | Effect::DealDamage { .. }
             | Effect::MoveCounters { .. }
             | Effect::Token { .. }
+            | Effect::Transform { .. }
     ) {
         return None;
     }
@@ -8322,10 +8345,15 @@ pub(crate) fn extract_optional_target_multi_target(
 /// - The effect must surface an announced target: `Effect::target_filter()` is
 ///   `Some` and is not a context reference. A SelfRef/`ParentTarget` body has
 ///   no target phrase the quantifier could govern.
-/// - `extract_optional_target_multi_target` declines the six effects that
+/// - The surfaced slot must not be the untyped `TargetFilter::Any`: that means
+///   the clause's lowering dropped the printed object type, so an announced
+///   count on it would be inert (Razorgrass Invoker's subject `Pump`). Damage is
+///   the one class whose untyped recipient is the printed one ("any target",
+///   CR 115.4), so `DealDamage` / `EachSourceDealsDamage` keep the spec.
+/// - `extract_optional_target_multi_target` declines the eight effects that
 ///   cannot yet represent a declined optional target (`Counter`, `Attach`,
-///   `CopySpell`, `BecomeCopy`, `MoveCounters`, `Token`), keeping their base
-///   behavior.
+///   `CopySpell`, `BecomeCopy`, `DealDamage`, `MoveCounters`, `Token`,
+///   `Transform`), keeping their base behavior.
 ///
 /// This function never writes `optional_targeting`; that flag belongs to the
 /// Attach HOST frame captured in `imperative.rs`, and non-Attach clauses are
@@ -8339,6 +8367,20 @@ pub(crate) fn apply_optional_target_fixup(clause: &mut ParsedEffectClause, claus
         return;
     };
     if filter.is_context_ref() {
+        return;
+    }
+    // CR 115.1 + CR 115.4 + CR 601.2c: an untyped `Any` slot cannot carry the
+    // announced count — the lowering dropped the printed object type, so the
+    // slot would offer every target while the effect still reads its own
+    // referent (Razorgrass Invoker's subject `Pump`). Damage keeps the spec:
+    // "any target" is a printed untyped recipient. Mirrors the untyped-slot
+    // guard in the multi-slot splitter (`multi_target_list.rs`).
+    if filter == &TargetFilter::Any
+        && !matches!(
+            clause.effect,
+            Effect::DealDamage { .. } | Effect::EachSourceDealsDamage { .. }
+        )
+    {
         return;
     }
     let Some(spec) = extract_optional_target_multi_target(clause_text, &clause.effect) else {
