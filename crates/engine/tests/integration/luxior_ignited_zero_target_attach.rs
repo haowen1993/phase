@@ -252,15 +252,25 @@ fn sting_enters_with_no_legal_creature_and_attaches_to_nothing() {
     // trigger still resolves. The hone-counter instruction is a separate
     // mandatory step, so its EffectResolved must appear BEFORE the Attach one
     // (CR 608.2c: instructions are followed in order).
+    let first_effect_resolution = |kind: EffectKind| {
+        outcome.events().iter().position(|event| {
+            matches!(
+                event,
+                GameEvent::EffectResolved {
+                    kind: resolved,
+                    ..
+                } if *resolved == kind
+            )
+        })
+    };
+    let counter_step =
+        first_effect_resolution(EffectKind::PutCounter).expect("hone-counter step must resolve");
+    let attach_step = first_effect_resolution(EffectKind::Attach)
+        .expect("the declined Attach must still resolve as a no-op");
     assert!(
-        outcome.events().iter().any(|event| matches!(
-            event,
-            GameEvent::EffectResolved {
-                kind: EffectKind::PutCounter,
-                ..
-            }
-        )),
-        "the hone-counter step must resolve before the declined Attach: {:?}",
+        counter_step < attach_step,
+        "CR 608.2c: the hone-counter step ({counter_step}) must precede the declined Attach \
+         ({attach_step}): {:?}",
         outcome.events()
     );
     assert_eq!(attached_object(&outcome, sting), None);

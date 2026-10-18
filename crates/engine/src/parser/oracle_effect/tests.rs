@@ -21350,9 +21350,9 @@ fn attach_defs<'a>(defs: &[&'a AbilityDefinition]) -> Vec<&'a AbilityDefinition>
         .collect()
 }
 
-/// A non-Counter/non-Attach effect that surfaces a declared target: the
-/// detector unit rows use it as the announced-target stand-in so only the
-/// P1/P2 text evidence and the P3/P4 exclusions are under test.
+/// A non-excluded effect that surfaces a declared target: the detector unit
+/// rows use it as the announced-target stand-in so only the P1/P2 text evidence
+/// and the effect-capacity exclusions are under test.
 fn destroy_stand_in() -> Effect {
     Effect::Destroy {
         target: TargetFilter::Any,
@@ -21407,6 +21407,30 @@ fn optional_target_detector_declines_a_mandatory_first_target_phrase() {
 }
 
 #[test]
+fn optional_target_detector_declines_a_resource_quantifier() {
+    // "up to three" governs the +1/+1 counters (a resource count), not the
+    // target; the first target phrase is "target creature", which the
+    // quantifier does not reach, so the two offsets disagree.
+    assert_eq!(
+        extract_optional_target_multi_target(
+            "Put up to three +1/+1 counters on target creature.",
+            &destroy_stand_in(),
+        ),
+        None
+    );
+    // Positive reach-guard: the same resource count with an optional TARGET
+    // phrase ("up to one target creature") is detected; only the governed
+    // article's offset decides.
+    assert_eq!(
+        extract_optional_target_multi_target(
+            "Put up to three +1/+1 counters on up to one target creature.",
+            &destroy_stand_in(),
+        ),
+        Some(MultiTargetSpec::fixed(0, 1))
+    );
+}
+
+#[test]
 fn optional_target_detector_masks_quoted_granted_abilities() {
     // The only "up to one target" phrase sits inside a quoted granted ability;
     // the byte-preserving masker removes it from the scan, so the outer clause
@@ -21429,29 +21453,32 @@ fn optional_target_detector_masks_quoted_granted_abilities() {
 }
 
 #[test]
-fn optional_target_detector_declines_counter_and_attach_operands() {
-    // CR 115.1 + CR 115.6: `Effect::Counter` has no field for an announced
-    // count (Double Negative, Katara's Reversal, Repel Intruders, Repulsive
-    // Mutation, Tishana's Tidebinder), so the detector declines on capacity.
+fn optional_target_detector_declines_effects_without_a_declined_target_representation() {
+    // CR 115.1 + CR 115.6: these six effects have no representation for a
+    // declined optional target yet, so the detector keeps their base behavior.
+    // Every row pairs the declining effect with the same text under
+    // `destroy_stand_in`: the text evidence alone is sufficient, so only the
+    // effect capacity declines.
+
+    // `Effect::Counter` has no field for an announced count (Double Negative,
+    // Katara's Reversal, Repel Intruders, Repulsive Mutation, Tishana's
+    // Tidebinder), so "counter up to N target …" cannot carry the spec.
     let counter = Effect::Counter {
         target: TargetFilter::Any,
         source_rider: None,
         countered_spell_zone: None,
     };
+    let counter_text = "Counter up to one target spell.";
     assert_eq!(
-        extract_optional_target_multi_target("Counter up to one target spell.", &counter),
+        extract_optional_target_multi_target(counter_text, &counter),
         None
     );
-    // Positive reach-guard: the text evidence alone is sufficient.
-    assert!(extract_optional_target_multi_target(
-        "Counter up to one target spell.",
-        &destroy_stand_in()
-    )
-    .is_some());
+    assert!(extract_optional_target_multi_target(counter_text, &destroy_stand_in()).is_some());
 
     // The Attach host frame is captured by `imperative.rs`, never by this
     // detector; writing the host's count into `multi_target` would bind the
-    // attachment operand.
+    // attachment operand (Luxior, Ignited; The Aetherspark; Sting, Bilbo's
+    // Sword).
     let attach = Effect::Attach {
         attachment: TargetFilter::SelfRef,
         target: TargetFilter::Any,
@@ -21459,18 +21486,83 @@ fn optional_target_detector_declines_counter_and_attach_operands() {
             count: crate::types::ability::AttachCardinality::One,
         },
     };
+    let attach_text = "Attach this Equipment to up to one target creature you control.";
     assert_eq!(
-        extract_optional_target_multi_target(
-            "Attach this Equipment to up to one target creature you control.",
-            &attach,
-        ),
+        extract_optional_target_multi_target(attach_text, &attach),
         None
     );
-    assert!(extract_optional_target_multi_target(
-        "Attach this Equipment to up to one target creature you control.",
-        &destroy_stand_in(),
-    )
-    .is_some());
+    assert!(extract_optional_target_multi_target(attach_text, &destroy_stand_in()).is_some());
+
+    // `Effect::CopySpell` copies ONE object; a zero-target decline would copy
+    // the top of the stack instead (Display of Power).
+    let copy_text = "Copy any number of target instant and/or sorcery spells.";
+    let copy = parse_effect(copy_text);
+    assert!(matches!(copy, Effect::CopySpell { .. }), "{copy:?}");
+    assert_eq!(extract_optional_target_multi_target(copy_text, &copy), None);
+    assert_eq!(
+        extract_optional_target_multi_target(copy_text, &destroy_stand_in()),
+        Some(MultiTargetSpec::unlimited(0))
+    );
+
+    // `Effect::BecomeCopy` errors `MissingParam` on a declined copy source
+    // (Fleeting Reflection).
+    let become_text = "Until end of turn, it becomes a copy of up to one other target creature.";
+    let become_copy = parse_effect(become_text);
+    assert!(
+        matches!(become_copy, Effect::BecomeCopy { .. }),
+        "{become_copy:?}"
+    );
+    assert_eq!(
+        extract_optional_target_multi_target(become_text, &become_copy),
+        None
+    );
+    assert_eq!(
+        extract_optional_target_multi_target(become_text, &destroy_stand_in()),
+        Some(MultiTargetSpec::fixed(0, 1))
+    );
+
+    // `Effect::MoveCounters` reads only `ability.optional_targeting` in its
+    // engine arms, so the stamped spec would be dropped and a declined target
+    // still demanded (Heroic Sacrifice; Donatello, Mutant Mechanic; Graft
+    // Surgeon; Host of the Hereafter).
+    let move_text = "put its counters on up to one target creature you control";
+    let move_counters = parse_effect(move_text);
+    assert!(
+        matches!(move_counters, Effect::MoveCounters { .. }),
+        "{move_counters:?}"
+    );
+    assert_eq!(
+        extract_optional_target_multi_target(move_text, &move_counters),
+        None
+    );
+    assert_eq!(
+        extract_optional_target_multi_target(move_text, &destroy_stand_in()),
+        Some(MultiTargetSpec::fixed(0, 1))
+    );
+
+    // `Effect::Token` treats a declined `attach_to` host as named and creates
+    // no token (Cut In; Eriette's Whisper; Gadwick's First Duel; Living
+    // Lectern; Shatter the Oath; Twisted Fealty; Witch's Mark).
+    for text in [
+        "Create a Young Hero Role token attached to up to one target creature you control.",
+        "Create a Wicked Role token attached to up to one target creature you control.",
+        "Create a Wicked Role token attached to up to one target creature.",
+        "Create a Cursed Role token attached to up to one target creature.",
+        "Create a Sorcerer Role token attached to up to one other target creature you control.",
+    ] {
+        let token = parse_effect(text);
+        assert!(matches!(token, Effect::Token { .. }), "{text}: {token:?}");
+        assert_eq!(
+            extract_optional_target_multi_target(text, &token),
+            None,
+            "{text}"
+        );
+        assert_eq!(
+            extract_optional_target_multi_target(text, &destroy_stand_in()),
+            Some(MultiTargetSpec::fixed(0, 1)),
+            "{text}"
+        );
+    }
 }
 
 #[test]
@@ -21624,54 +21716,101 @@ fn gold_rush_second_sentence_pump_recovers_up_to_one() {
 }
 
 #[test]
-fn token_attached_to_up_to_one_recovers_the_host_count() {
-    // The Token effect surfaces `attach_to` as its announced target; the same
-    // "up to one other target creature" phrase must stamp it for every printed
-    // carrier (Living Lectern, Cut In, Witch's Mark).
-    for (name, text, types) in [
-        (
-            "Living Lectern",
-            "{1}, Sacrifice this creature: Draw a card. Create a Sorcerer Role token attached to up to one other target creature you control. Activate only as a sorcery.",
-            &["Artifact", "Creature"][..],
-        ),
+fn token_attach_to_keeps_base_behavior_while_the_effect_is_excluded() {
+    // Residual (labelled, not a spec claim): `Effect::Token` treats a declined
+    // `attach_to` host as named — the token is never created — so the detector
+    // excludes the effect and these clauses keep base behavior (no announced
+    // count). Follow-up: `token.rs`'s host-request derivation must treat a
+    // declined optional host as `NotRequested`, then lift the exclusion.
+    // Witnesses: the seven printed Role carriers.
+    for (name, text) in [
         (
             "Cut In",
-            "Cut In deals 4 damage to target creature.\nCreate a Young Hero Role token attached to up to one target creature you control.",
-            &["Instant"][..],
+            "Create a Young Hero Role token attached to up to one target creature you control.",
+        ),
+        (
+            "Eriette's Whisper",
+            "Create a Wicked Role token attached to up to one target creature you control.",
+        ),
+        (
+            "Gadwick's First Duel",
+            "Create a Cursed Role token attached to up to one target creature.",
+        ),
+        (
+            "Living Lectern",
+            "Create a Sorcerer Role token attached to up to one other target creature you control.",
+        ),
+        (
+            "Shatter the Oath",
+            "Create a Wicked Role token attached to up to one target creature you control.",
+        ),
+        (
+            "Twisted Fealty",
+            "Create a Wicked Role token attached to up to one target creature.",
         ),
         (
             "Witch's Mark",
-            "You may discard a card. If you do, draw two cards.\nCreate a Wicked Role token attached to up to one target creature you control.",
-            &["Sorcery"][..],
+            "Create a Wicked Role token attached to up to one target creature you control.",
         ),
     ] {
-        let parsed = parse_card(text, name, &[], types);
-        let defs = all_ability_defs(&parsed);
-        let tokens: Vec<_> = defs
-            .iter()
-            .copied()
-            .filter(|def| {
-                matches!(
-                    def.effect.as_ref(),
-                    Effect::Token {
-                        attach_to: Some(_),
-                        ..
-                    }
-                )
-            })
-            .collect();
-        assert!(!tokens.is_empty(), "{name}: {defs:#?}");
-        // The parser can publish the sentence both inside the activated/trigger
-        // chain and as a standalone ability; every copy must carry the count.
-        for token in &tokens {
-            assert_eq!(
-                token.multi_target,
-                Some(MultiTargetSpec::fixed(0, 1)),
-                "{name}: {token:#?}"
-            );
-            assert!(!token.optional_targeting, "{name}: {token:#?}");
-        }
+        let clause = parse_effect_clause(text, &mut ParseContext::default());
+        assert!(
+            matches!(
+                clause.effect,
+                Effect::Token {
+                    attach_to: Some(_),
+                    ..
+                }
+            ),
+            "{name}: {:?}",
+            clause.effect
+        );
+        assert_eq!(
+            clause.multi_target, None,
+            "{name}: {:?}",
+            clause.multi_target
+        );
+        // CR 115.6: the Attach-host flag is the only other optionality
+        // authority and belongs to Attach; a Token clause never carries it.
+        assert!(!clause.optional_targeting, "{name}");
     }
+}
+
+#[test]
+fn display_of_power_and_fleeting_reflection_keep_base_behavior_while_excluded() {
+    // Residual (labelled, not a spec claim): `Effect::CopySpell` copies one
+    // object (a zero-target decline would copy the top of the stack) and
+    // `Effect::BecomeCopy` errors `MissingParam` on a declined copy source, so
+    // the detector excludes both and these clauses keep base behavior.
+    // Follow-up: `copy_spell.rs` needs an explicit zero-target decline and the
+    // BecomeCopy engine arm must move to `targeting_is_optional()`.
+    let display = parse_effect_clause(
+        "Copy any number of target instant and/or sorcery spells.",
+        &mut ParseContext::default(),
+    );
+    assert!(
+        matches!(display.effect, Effect::CopySpell { .. }),
+        "{:?}",
+        display.effect
+    );
+    assert_eq!(display.multi_target, None, "{:?}", display.multi_target);
+    assert!(!display.optional_targeting);
+
+    let reflection = parse_effect_clause(
+        "Until end of turn, it becomes a copy of up to one other target creature.",
+        &mut ParseContext::default(),
+    );
+    assert!(
+        matches!(reflection.effect, Effect::BecomeCopy { .. }),
+        "{:?}",
+        reflection.effect
+    );
+    assert_eq!(
+        reflection.multi_target, None,
+        "{:?}",
+        reflection.multi_target
+    );
+    assert!(!reflection.optional_targeting);
 }
 
 #[test]
@@ -21717,10 +21856,14 @@ fn razorgrass_invoker_subject_pump_keeps_up_to_one() {
 }
 
 #[test]
-fn heroic_sacrifice_compound_head_move_counters_recovers_up_to_one() {
-    // The MoveCounters is the compound HEAD of the delayed trigger's clause:
-    // `lower_imperative_clause` returns before the clause fixup, which then
-    // stamps the head (the "and draw a card" tail is the sub).
+fn heroic_sacrifice_compound_head_move_counters_keeps_base_behavior() {
+    // Residual (labelled, not a spec claim): `Effect::MoveCounters` has no
+    // representation for a declined optional target — its engine arms
+    // (`game/ability_utils.rs`) read only `ability.optional_targeting`, so a
+    // stamped min-0 spec would be dropped and the engine would still demand a
+    // target. The detector therefore excludes the effect and the compound head
+    // keeps base behavior (no announced count). Follow-up: move the
+    // MoveCounters arms to `targeting_is_optional()`, then lift the exclusion.
     let clause = parse_effect_clause(
         "put its counters on up to one target creature you control and draw a card",
         &mut ParseContext::default(),
@@ -21730,12 +21873,8 @@ fn heroic_sacrifice_compound_head_move_counters_recovers_up_to_one() {
         "{:?}",
         clause.effect
     );
-    assert_eq!(
-        clause.multi_target,
-        Some(MultiTargetSpec::fixed(0, 1)),
-        "{:?}",
-        clause.multi_target
-    );
+    assert_eq!(clause.multi_target, None, "{:?}", clause.multi_target);
+    assert!(!clause.optional_targeting);
 }
 
 #[test]

@@ -8229,15 +8229,36 @@ pub(crate) fn extract_bounded_target_multi_target(text: &str) -> Option<MultiTar
 /// passes the remainder through unchanged — a malformed quoted "up to one
 /// target" is accepted as visible text; no corpus card has one.
 ///
-/// P3 capacity: `Effect::Counter { .. }` declines. `Effect::Counter` has no
-/// field for the announced count, so "counter up to N target …" cannot carry
-/// the spec (Double Negative, Katara's Reversal, Repel Intruders, Repulsive
-/// Mutation, Tishana's Tidebinder).
-/// P4 operand split: `Effect::Attach { .. }` declines. An Attach prints a
-/// target phrase for its HOST operand and/or its ATTACHMENT operand; the host
-/// frame is captured separately by the typed host capture in `imperative.rs`,
-/// and writing the host's "up to one" into `clause.multi_target` would bind the
-/// wrong operand.
+/// Capacity exclusions: `Counter`, `Attach`, `CopySpell`, `BecomeCopy`,
+/// `MoveCounters` and `Token` decline. These effects have no representation for
+/// a declined optional target yet (the resolver errors or silently does nothing
+/// / the token host is treated as named), so keep base behavior until the
+/// effect grows the capability: Counter, Attach, CopySpell, BecomeCopy,
+/// MoveCounters, Token.
+/// - `Counter` has no field for the announced count, so "counter up to N
+///   target …" cannot carry the spec (Double Negative, Katara's Reversal, Repel
+///   Intruders, Repulsive Mutation, Tishana's Tidebinder).
+/// - `Attach` prints a target phrase for its HOST operand and/or its ATTACHMENT
+///   operand; the host frame is captured separately by the typed host capture in
+///   `imperative.rs`, and writing the host's "up to one" into
+///   `clause.multi_target` would bind the wrong operand (Luxior, Ignited; The
+///   Aetherspark; Sting, Bilbo's Sword).
+/// - `CopySpell` copies one object and a zero-target decline would copy the top
+///   of the stack instead (Display of Power).
+/// - `BecomeCopy` errors `MissingParam` on a declined copy source (Fleeting
+///   Reflection).
+/// - `MoveCounters` reads only `ability.optional_targeting` in its engine arms,
+///   so the stamped spec would be dropped and a declined target still demanded
+///   (Heroic Sacrifice; Donatello, Mutant Mechanic; Graft Surgeon; Host of the
+///   Hereafter and the other stamped carriers).
+/// - `Token` treats a declined `attach_to` host as named and creates no token
+///   (Cut In; Eriette's Whisper; Gadwick's First Duel; Living Lectern; Shatter
+///   the Oath; Twisted Fealty; Witch's Mark).
+///
+/// Follow-ups (the reason each exclusion is temporary): the engine's
+/// `MoveCounters` and `BecomeCopy` arms must move to `targeting_is_optional()`;
+/// `token.rs`'s host-request derivation must treat a declined optional host as
+/// `NotRequested`; `copy_spell.rs` needs an explicit zero-target decline.
 ///
 /// The write-side guards (no existing authority, announced non-context target)
 /// live in [`apply_optional_target_fixup`], the single clause-level caller. The
@@ -8248,7 +8269,15 @@ pub(crate) fn extract_optional_target_multi_target(
     text: &str,
     effect: &Effect,
 ) -> Option<MultiTargetSpec> {
-    if matches!(effect, Effect::Counter { .. } | Effect::Attach { .. }) {
+    if matches!(
+        effect,
+        Effect::Counter { .. }
+            | Effect::Attach { .. }
+            | Effect::CopySpell { .. }
+            | Effect::BecomeCopy { .. }
+            | Effect::MoveCounters { .. }
+            | Effect::Token { .. }
+    ) {
         return None;
     }
     let masked = nom_primitives::mask_double_quoted_spans_preserving_len(text);
@@ -8293,9 +8322,10 @@ pub(crate) fn extract_optional_target_multi_target(
 /// - The effect must surface an announced target: `Effect::target_filter()` is
 ///   `Some` and is not a context reference. A SelfRef/`ParentTarget` body has
 ///   no target phrase the quantifier could govern.
-/// - `extract_optional_target_multi_target` declines the Counter (CR 115.1 +
-///   CR 115.6: `Effect::Counter` cannot carry the announced count) and Attach
-///   (operand split) classes.
+/// - `extract_optional_target_multi_target` declines the six effects that
+///   cannot yet represent a declined optional target (`Counter`, `Attach`,
+///   `CopySpell`, `BecomeCopy`, `MoveCounters`, `Token`), keeping their base
+///   behavior.
 ///
 /// This function never writes `optional_targeting`; that flag belongs to the
 /// Attach HOST frame captured in `imperative.rs`, and non-Attach clauses are

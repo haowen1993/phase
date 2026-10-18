@@ -19328,16 +19328,15 @@ fn try_parse_for_each_effect(text: &str, ctx: &mut ParseContext) -> Option<Parse
         let effect = thread_for_each_subject(effect, base_no_duration, ctx);
         let mut clause = parsed_for_each_quantity_effect(effect, duration, reference_target);
         // CR 115.6 + CR 601.2c: this producer threads the subject and lowers
-        // directly, bypassing `lower_clause_ast`; recover the clause's announced
-        // optional target set here, P5-gated, exactly as the damage-compound /
-        // damage-chain / compound-shuffle seams do. Witness: Gold Rush's "Until
-        // end of turn, up to one target creature gets +2/+2 for each Treasure you
-        // control." — the "for each" tail claims the clause before the clause
-        // junction, and the subject thread sets the target but drops the count.
-        if clause.multi_target.is_none() {
-            clause.multi_target =
-                extract_optional_target_multi_target(base_no_duration, &clause.effect);
-        }
+        // directly, bypassing `lower_clause_ast`, so it makes the same fixup
+        // call the clause junction makes — P5 write gate, announced
+        // non-context target guard, and the effect-capacity exclusions all stay
+        // in the single owner instead of being re-implemented here. Witness:
+        // Gold Rush's "Until end of turn, up to one target creature gets +2/+2
+        // for each Treasure you control." — the "for each" tail claims the
+        // clause before the clause junction, and the subject thread sets the
+        // target but drops the count.
+        apply_optional_target_fixup(&mut clause, base_no_duration);
         return Some(clause);
     }
 
