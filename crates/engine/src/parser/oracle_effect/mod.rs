@@ -23350,6 +23350,10 @@ fn try_parse_multi_target_damage_chain_inner(
     // reaches the clause junction's fixup, so the detector is run here on the
     // exact consumed slice and the result is stamped only when the segment has
     // no "each of ⟨N⟩" authority of its own.
+    // clippy::type_complexity: the four-tuple is a local build accumulator
+    // (effect, reserved target, "each of N" spec, this segment's optional spec);
+    // naming each field as a struct would add no behaviour. Kept local.
+    #[allow(clippy::type_complexity)]
     let mut segments: Vec<(
         Effect,
         Option<TargetFilter>,

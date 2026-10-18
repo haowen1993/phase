@@ -21333,9 +21333,7 @@ fn deal_damage_divided_fixed_among_one_or_two_targets_forked_bolt() {
 /// abilities, trigger and replacement bodies, their whole sub-ability chains,
 /// modal branches and boon grants. The CR 115.6 rows below use it to assert on
 /// the node a printed clause actually lowered to.
-fn all_ability_defs<'a>(
-    parsed: &'a crate::parser::oracle::ParsedAbilities,
-) -> Vec<&'a AbilityDefinition> {
+fn all_ability_defs(parsed: &crate::parser::oracle::ParsedAbilities) -> Vec<&AbilityDefinition> {
     let mut roots = Vec::new();
     collect_parsed_roots(parsed, true, &mut roots);
     let mut defs = Vec::new();
