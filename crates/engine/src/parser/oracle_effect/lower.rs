@@ -8330,13 +8330,17 @@ pub(crate) fn extract_optional_target_multi_target(
 /// CR 115.1 + CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d: The single
 /// clause-level owner of the optional target-count fixup.
 ///
-/// Called only from `lower_clause_ast` — the `Imperative` arm, the
+/// Called from `lower_clause_ast` — the `Imperative` arm, the
 /// `SubjectPredicate` arm (with `original_clause`, the text this clause was
 /// asked to lower), and the recursive `Conditional` body — after the clause's
-/// own effect lowering has settled. The clause fragment, not the enclosing
-/// chunk, is authoritative here: every sticky multi-sentence chunk the chunker
-/// can produce is claimed by an earlier parser before the generic tail, so the
-/// chunk this fixup owns is single-sentence on every measured route.
+/// own effect lowering has settled. One other direct caller exists:
+/// `try_parse_for_each_effect` in `oracle_effect/mod.rs`, the for-each numeric
+/// producer, which lowers its base effect without going through the clause
+/// junction and so must make the same call. The clause fragment, not the
+/// enclosing chunk, is authoritative here: every sticky multi-sentence chunk
+/// the chunker can produce is claimed by an earlier parser before the generic
+/// tail, so the chunk this fixup owns is single-sentence on every measured
+/// route.
 ///
 /// Guards:
 /// - P5 write gate: an existing `multi_target` is never overridden. Typed specs
@@ -8347,9 +8351,9 @@ pub(crate) fn extract_optional_target_multi_target(
 ///   no target phrase the quantifier could govern.
 /// - The surfaced slot must not be the untyped `TargetFilter::Any`: that means
 ///   the clause's lowering dropped the printed object type, so an announced
-///   count on it would be inert (Razorgrass Invoker's subject `Pump`). Damage is
-///   the one class whose untyped recipient is the printed one ("any target",
-///   CR 115.4), so `DealDamage` / `EachSourceDealsDamage` keep the spec.
+///   count on it would be inert (Razorgrass Invoker's subject `Pump`).
+///   `EachSourceDealsDamage` is the one live carve-out: its untyped recipient
+///   is the printed one ("any target", CR 115.4), so it keeps the spec.
 /// - `extract_optional_target_multi_target` declines the eight effects that
 ///   cannot yet represent a declined optional target (`Counter`, `Attach`,
 ///   `CopySpell`, `BecomeCopy`, `DealDamage`, `MoveCounters`, `Token`,
@@ -8372,14 +8376,11 @@ pub(crate) fn apply_optional_target_fixup(clause: &mut ParsedEffectClause, claus
     // CR 115.1 + CR 115.4 + CR 601.2c: an untyped `Any` slot cannot carry the
     // announced count — the lowering dropped the printed object type, so the
     // slot would offer every target while the effect still reads its own
-    // referent (Razorgrass Invoker's subject `Pump`). Damage keeps the spec:
-    // "any target" is a printed untyped recipient. Mirrors the untyped-slot
-    // guard in the multi-slot splitter (`multi_target_list.rs`).
+    // referent (Razorgrass Invoker's subject `Pump`). `EachSourceDealsDamage`
+    // keeps the spec: "any target" is a printed untyped recipient. Mirrors the
+    // untyped-slot guard in the multi-slot splitter (`multi_target_list.rs`).
     if filter == &TargetFilter::Any
-        && !matches!(
-            clause.effect,
-            Effect::DealDamage { .. } | Effect::EachSourceDealsDamage { .. }
-        )
+        && !matches!(clause.effect, Effect::EachSourceDealsDamage { .. })
     {
         return;
     }

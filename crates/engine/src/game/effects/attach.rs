@@ -283,17 +283,23 @@ fn resolve_bound_attachment_operation(
     // object hosts, so a player-host Attach (no corpus card prints one) must not
     // be silently skipped, and a context-ref/scan host needs no announced slot —
     // its absence stays the missing-operand error below, unchanged.
-    // CR 115.6 + CR 601.2c: a declined optional host leaves the announced
-    // object-target list empty; if any object target was announced, the host was
-    // chosen (or the binding was lost downstream — a separate pre-existing chain
-    // defect), so keep the existing resolution path rather than turning an error
+    // CR 115.1a + CR 115.6 + CR 601.2c + CR 608.2c: an announced object target
+    // is HOST evidence only when it occupies the HOST slot. The ATTACHMENT
+    // operand prints "target …" on the same class ("attach target Equipment you
+    // control to up to one target creature you control", Iron Hills Stalwart;
+    // Blacksmith's Talent level 2), so that Equipment sits in `ability.targets`
+    // too. Treating ANY object target as the chosen host would therefore skip
+    // this no-op when the controller chose the Equipment and declined the host;
+    // the resolver would then fall through to `resolve_object_filter`'s
+    // battlefield scan and auto-attach to an unchosen creature. Match against
+    // the HOST filter instead — the same filter authority the resolver uses —
+    // so only a target that could BE the host counts. If the host was chosen
+    // (or its binding was lost downstream — a separate pre-existing chain
+    // defect), keep the existing resolution path rather than turning an error
     // into a silent no-op.
     if ability.optional_targeting
         && ability.attach_host_target().is_none()
-        && !ability
-            .targets
-            .iter()
-            .any(|target| matches!(target, TargetRef::Object(_)))
+        && !host_slot_announced(state, ability, target_filter)
         && crate::game::ability_utils::attach_host_filter_needs_target_slot(target_filter)
         && target_filter.denotes_battlefield_objects()
     {
@@ -1619,6 +1625,31 @@ fn explicit_attachment_target_chosen(
 ) -> bool {
     let ctx = FilterContext::from_ability(ability);
     let effective = crate::game::effects::resolved_object_filter(state, ability, attachment_filter);
+    ability.targets.iter().any(|target| {
+        matches!(
+            target,
+            TargetRef::Object(id) if matches_target_filter(state, *id, &effective, &ctx)
+        )
+    })
+}
+
+/// CR 115.1a + CR 115.6 + CR 601.2c + CR 608.2c: whether an announced object
+/// target occupies the HOST slot of this Attach instruction.
+///
+/// Both roles can print "target" on one instruction ("attach target Equipment
+/// you control to up to one target creature you control"), so the ATTACHMENT
+/// object also appears in `ability.targets`. Filter membership is the only
+/// available discriminator — a target that could not be the host cannot be
+/// host evidence — and it is the same filter the resolver itself matches host
+/// candidates against (see `resolve_attach_target`), so the two seams cannot
+/// disagree about what counts as a host.
+fn host_slot_announced(
+    state: &GameState,
+    ability: &ResolvedAbility,
+    host_filter: &TargetFilter,
+) -> bool {
+    let ctx = FilterContext::from_ability(ability);
+    let effective = crate::game::effects::resolved_object_filter(state, ability, host_filter);
     ability.targets.iter().any(|target| {
         matches!(
             target,

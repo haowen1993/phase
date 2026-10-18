@@ -24,7 +24,8 @@
 //! failed, so only the same-graveyard positive is kept.
 
 use engine::game::scenario::{GameRunner, GameScenario, Outcome, P0, P1};
-use engine::types::ability::EffectKind;
+use engine::types::ability::{EffectKind, TargetRef};
+use engine::types::actions::GameAction;
 use engine::types::counter::CounterType;
 use engine::types::events::GameEvent;
 use engine::types::game_state::WaitingFor;
@@ -76,8 +77,8 @@ fn attached_object(outcome: &Outcome, id: ObjectId) -> Option<ObjectId> {
         .and_then(|target| target.as_object())
 }
 
-fn attach_effect_resolved(outcome: &Outcome) -> bool {
-    outcome.events().iter().any(|event| {
+fn attach_effect_resolved_in(events: &[GameEvent]) -> bool {
+    events.iter().any(|event| {
         matches!(
             event,
             GameEvent::EffectResolved {
@@ -86,6 +87,10 @@ fn attach_effect_resolved(outcome: &Outcome) -> bool {
             }
         )
     })
+}
+
+fn attach_effect_resolved(outcome: &Outcome) -> bool {
+    attach_effect_resolved_in(outcome.events())
 }
 
 /// Build the Luxior battlefield state: the Equipment Planeswalker with loyalty
@@ -310,6 +315,300 @@ fn sting_enters_and_attaches_to_a_chosen_host() {
         .resolve();
     assert_eq!(attached_object(&chosen, sting), Some(mine));
     assert!(attach_effect_resolved(&chosen));
+}
+
+// ---------------------------------------------------------------------------
+// Both operands printed "target": the chosen ATTACHMENT is not host evidence
+// ---------------------------------------------------------------------------
+//
+// CR 115.1a + CR 115.6 + CR 601.2c + CR 608.2c: "attach target Equipment you
+// control to up to one target creature you control" prints "target" for BOTH
+// roles, so the chosen Equipment sits in the announced target list beside the
+// (declinable) host. The declined-host no-op must key on HOST-slot occupancy:
+// matching the host filter, not "any announced object target", or choosing the
+// Equipment and declining the host would fall through to a battlefield scan and
+// auto-attach to an unchosen creature.
+
+const IRON_HILLS_STALWART_ORACLE: &str = "Reach, trample\nWhen this creature enters, attach target Equipment you control to up to one target creature you control.";
+
+const BLACKSMITHS_TALENT_ORACLE: &str = "(Gain the next level as a sorcery to add its ability.)\nWhen this Class enters, create a colorless Equipment artifact token named Sword with \"Equipped creature gets +1/+1\" and equip {2}.\n{2}{R}: Level 2\nAt the beginning of combat on your turn, attach target Equipment you control to up to one target creature you control.\n{3}{R}: Level 3\nDuring your turn, equipped creatures you control have double strike and haste.";
+
+/// An Equipment permanent under P0's control, already on the battlefield.
+fn battlefield_equipment(scenario: &mut GameScenario, name: &str) -> ObjectId {
+    scenario
+        .add_artifact_from_oracle(P0, name, "Equipped creature gets +1/+0.")
+        .with_subtypes(vec!["Equipment"])
+        .id()
+}
+
+/// Drive to the beginning-of-combat Attach trigger's announcement prompt,
+/// accumulating the events emitted on the way.
+fn advance_to_attach_trigger_prompt(runner: &mut GameRunner, events: &mut Vec<GameEvent>) {
+    for _ in 0..40 {
+        match runner.state().waiting_for.clone() {
+            WaitingFor::TriggerTargetSelection { .. } => return,
+            WaitingFor::Priority { .. } => {
+                events.extend(
+                    runner
+                        .act(GameAction::PassPriority)
+                        .expect("priority must be passable")
+                        .events,
+                );
+            }
+            WaitingFor::OrderTriggers { triggers, .. } => {
+                events.extend(
+                    runner
+                        .act(GameAction::OrderTriggers {
+                            order: (0..triggers.len()).collect(),
+                        })
+                        .expect("trigger ordering must be accepted")
+                        .events,
+                );
+            }
+            other => panic!("unexpected window before the Attach target prompt: {other:?}"),
+        }
+    }
+    panic!("the Attach trigger's announcement prompt was not reached");
+}
+
+/// Answer the trigger's two printed Attach roles at announcement: the mandatory
+/// Equipment slot first, then the optional host slot (chosen or declined).
+fn answer_attach_trigger_prompt(
+    runner: &mut GameRunner,
+    events: &mut Vec<GameEvent>,
+    equipment: ObjectId,
+    host: Option<ObjectId>,
+) {
+    let WaitingFor::TriggerTargetSelection {
+        target_slots,
+        selection,
+        ..
+    } = runner.state().waiting_for.clone()
+    else {
+        panic!("expected the Attach announcement prompt");
+    };
+    let attachment_slot = &target_slots[selection.current_slot];
+    assert!(
+        attachment_slot
+            .legal_targets
+            .contains(&TargetRef::Object(equipment)),
+        "the printed Equipment target must open the announcement, got {:?}",
+        attachment_slot.legal_targets
+    );
+    events.extend(
+        runner
+            .act(GameAction::ChooseTarget {
+                target: Some(TargetRef::Object(equipment)),
+            })
+            .expect("the Equipment target must be accepted")
+            .events,
+    );
+
+    let WaitingFor::TriggerTargetSelection {
+        target_slots,
+        selection,
+        ..
+    } = runner.state().waiting_for.clone()
+    else {
+        panic!("expected the host slot after the Equipment target");
+    };
+    let host_slot = &target_slots[selection.current_slot];
+    assert!(
+        host_slot.optional,
+        "the host is \"up to one target creature\", so its slot must be declinable"
+    );
+    if let Some(host) = host {
+        assert!(
+            host_slot.legal_targets.contains(&TargetRef::Object(host)),
+            "the chosen host must be a legal target, got {:?}",
+            host_slot.legal_targets
+        );
+    }
+    events.extend(
+        runner
+            .act(GameAction::ChooseTarget {
+                target: host.map(TargetRef::Object),
+            })
+            .expect("the host slot must accept the chosen host or a decline")
+            .events,
+    );
+}
+
+/// Pass priority until the pending Attach trigger has fully resolved.
+fn finish_pending_trigger(runner: &mut GameRunner, events: &mut Vec<GameEvent>) {
+    for _ in 0..40 {
+        if runner.state().stack.is_empty()
+            && matches!(runner.state().waiting_for, WaitingFor::Priority { .. })
+        {
+            return;
+        }
+        match runner.state().waiting_for.clone() {
+            WaitingFor::Priority { .. } => {
+                events.extend(
+                    runner
+                        .act(GameAction::PassPriority)
+                        .expect("priority must be passable")
+                        .events,
+                );
+            }
+            WaitingFor::OrderTriggers { triggers, .. } => {
+                events.extend(
+                    runner
+                        .act(GameAction::OrderTriggers {
+                            order: (0..triggers.len()).collect(),
+                        })
+                        .expect("trigger ordering must be accepted")
+                        .events,
+                );
+            }
+            other => panic!("unexpected window while the Attach trigger resolves: {other:?}"),
+        }
+    }
+    panic!("the Attach trigger did not finish resolving");
+}
+
+#[test]
+fn iron_hills_stalwart_etb_declined_host_keeps_the_chosen_equipment_unattached() {
+    // Reach-guard (same test): declaring BOTH printed targets attaches to the
+    // chosen host and leaves the creature's own body alone.
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    let stalwart = scenario
+        .add_creature_to_hand_from_oracle(
+            P0,
+            "Iron Hills Stalwart",
+            4,
+            5,
+            IRON_HILLS_STALWART_ORACLE,
+        )
+        .id();
+    let equipment = battlefield_equipment(&mut scenario, "Rusty Sword");
+    let host = scenario.add_creature(P0, "Willing Host", 2, 2).id();
+    let mut chosen_runner = scenario.build();
+    grant_priority(&mut chosen_runner, P0);
+    let chosen = chosen_runner
+        .cast(stalwart)
+        .target_object(equipment)
+        .target_object(host)
+        .resolve();
+    assert_eq!(
+        attached_object(&chosen, equipment),
+        Some(host),
+        "positive reach-guard: with both printed targets declared the Equipment attaches to the chosen host"
+    );
+
+    // Declined: the Equipment is the mandatory printed target; the host is
+    // "up to one target creature" and the controller chooses none.
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    let stalwart = scenario
+        .add_creature_to_hand_from_oracle(
+            P0,
+            "Iron Hills Stalwart",
+            4,
+            5,
+            IRON_HILLS_STALWART_ORACLE,
+        )
+        .id();
+    let equipment = battlefield_equipment(&mut scenario, "Rusty Sword");
+    let mut runner = scenario.build();
+    grant_priority(&mut runner, P0);
+    let declined = runner.cast(stalwart).target_object(equipment).resolve();
+    assert_eq!(
+        attached_object(&declined, equipment),
+        None,
+        "choosing the Equipment is not host evidence: a declined host must leave it unattached \
+         instead of auto-attaching to the first creature the battlefield scan finds"
+    );
+    assert!(
+        attach_effect_resolved(&declined),
+        "the Attach instruction still resolves as a no-op: {:?}",
+        declined.events()
+    );
+    assert!(matches!(
+        declined.final_waiting_for(),
+        WaitingFor::Priority { .. }
+    ));
+}
+
+/// Blacksmith's Talent at level 2: the beginning-of-combat trigger prints both
+/// roles as targets. The trigger fires at BeginCombat and announces through the
+/// `TriggerTargetSelection` prompt, which is driven directly here.
+fn blacksmiths_talent_at_level_two() -> (GameRunner, ObjectId, ObjectId, ObjectId) {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    let talent = scenario
+        .add_enchantment_from_oracle(P0, "Blacksmith's Talent", BLACKSMITHS_TALENT_ORACLE)
+        .with_subtypes(vec!["Class"])
+        .id();
+    let equipment = battlefield_equipment(&mut scenario, "Sword");
+    let host = scenario.add_creature(P0, "Willing Host", 2, 2).id();
+    let mut runner = scenario.build();
+    runner
+        .state_mut()
+        .objects
+        .get_mut(&talent)
+        .expect("the Class permanent exists")
+        .class_level = Some(2);
+    (runner, talent, equipment, host)
+}
+
+#[test]
+fn blacksmiths_talent_level_two_declined_host_keeps_the_chosen_equipment_unattached() {
+    // Reach-guard (same test): choosing both printed targets attaches.
+    let (mut chosen_runner, _, chosen_equipment, chosen_host) = blacksmiths_talent_at_level_two();
+    let mut chosen_events = Vec::new();
+    chosen_runner.advance_to_phase(Phase::BeginCombat);
+    advance_to_attach_trigger_prompt(&mut chosen_runner, &mut chosen_events);
+    answer_attach_trigger_prompt(
+        &mut chosen_runner,
+        &mut chosen_events,
+        chosen_equipment,
+        Some(chosen_host),
+    );
+    finish_pending_trigger(&mut chosen_runner, &mut chosen_events);
+    assert_eq!(
+        attached_object_by_state(&chosen_runner, chosen_equipment),
+        Some(chosen_host),
+        "positive reach-guard: the chosen host receives the chosen Equipment"
+    );
+
+    // Declined: the Equipment is chosen, the host is not.
+    let (mut runner, _, equipment, host) = blacksmiths_talent_at_level_two();
+    let mut events = Vec::new();
+    runner.advance_to_phase(Phase::BeginCombat);
+    advance_to_attach_trigger_prompt(&mut runner, &mut events);
+    answer_attach_trigger_prompt(&mut runner, &mut events, equipment, None);
+    finish_pending_trigger(&mut runner, &mut events);
+    assert_eq!(
+        attached_object_by_state(&runner, equipment),
+        None,
+        "declining the optional host must not auto-attach the chosen Equipment to the \
+         battlefield scan's first legal creature (here the reach-guard's own host)"
+    );
+    assert!(
+        attach_effect_resolved_in(&events),
+        "the declined Attach must still resolve as a no-op: {events:?}"
+    );
+    assert!(
+        matches!(runner.state().waiting_for, WaitingFor::Priority { .. }),
+        "the trigger must finish at a priority window, got {:?}",
+        runner.state().waiting_for
+    );
+    assert!(
+        runner.state().objects[&host].attachments.is_empty(),
+        "no creature may receive the declined attachment, got {:?}",
+        runner.state().objects[&host].attachments
+    );
+}
+
+fn attached_object_by_state(runner: &GameRunner, id: ObjectId) -> Option<ObjectId> {
+    runner
+        .state()
+        .objects
+        .get(&id)
+        .and_then(|object| object.attached_to.as_ref())
+        .and_then(|target| target.as_object())
 }
 
 // ---------------------------------------------------------------------------
