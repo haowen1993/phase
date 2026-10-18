@@ -321,7 +321,7 @@ fn sting_enters_and_attaches_to_a_chosen_host() {
 // Both operands printed "target": the chosen ATTACHMENT is not host evidence
 // ---------------------------------------------------------------------------
 //
-// CR 115.1a + CR 115.6 + CR 601.2c + CR 608.2c: "attach target Equipment you
+// CR 115.1a/c/d + CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d + CR 608.2c: "attach target Equipment you
 // control to up to one target creature you control" prints "target" for BOTH
 // roles, so the chosen Equipment sits in the announced target list beside the
 // (declinable) host. The declined-host no-op must key on HOST-slot occupancy:

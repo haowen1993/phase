@@ -283,7 +283,7 @@ fn resolve_bound_attachment_operation(
     // object hosts, so a player-host Attach (no corpus card prints one) must not
     // be silently skipped, and a context-ref/scan host needs no announced slot —
     // its absence stays the missing-operand error below, unchanged.
-    // CR 115.1a + CR 115.6 + CR 601.2c + CR 608.2c: an announced object target
+    // CR 115.1a/c/d + CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d + CR 608.2c: an announced object target
     // is HOST evidence only when it occupies the HOST slot. The ATTACHMENT
     // operand prints "target …" on the same class ("attach target Equipment you
     // control to up to one target creature you control", Iron Hills Stalwart;
@@ -1633,7 +1633,7 @@ fn explicit_attachment_target_chosen(
     })
 }
 
-/// CR 115.1a + CR 115.6 + CR 601.2c + CR 608.2c: whether an announced object
+/// CR 115.1a/c/d + CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d + CR 608.2c: whether an announced object
 /// target occupies the HOST slot of this Attach instruction.
 ///
 /// Both roles can print "target" on one instruction ("attach target Equipment
