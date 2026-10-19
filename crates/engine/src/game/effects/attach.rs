@@ -271,8 +271,8 @@ fn resolve_bound_attachment_operation(
 
     // CR 115.6 + CR 601.2c + CR 602.2b + CR 603.3d + CR 608.2c: a printed
     // "attach … to up to one target creature …" makes the HOST optional — zero
-    // targets may be chosen while the ability remains targeted and still
-    // resolves. An announced host slot is bound before this resolver runs
+    // targets may be chosen. The ability still requires targets, but with none
+    // chosen it is not targeted, and it still resolves. An announced host slot is bound before this resolver runs
     // (CR 601.2c for spells, CR 602.2b for activated abilities, CR 603.3d for
     // triggered abilities), so arriving here with NO host binding means the
     // controller chose none: the instruction is followed in order and does

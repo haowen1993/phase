@@ -2713,15 +2713,27 @@ const NOVEL_NUNCHAKU_ORACLE: &str = "When this Equipment enters, attach it to ta
 
 struct NunchakuOutcome {
     target_prompts: usize,
+    attach_resolutions: usize,
     fights: usize,
     attached: bool,
     theirs_damage: u32,
 }
 
-fn cast_novel_nunchaku() -> NunchakuOutcome {
+fn resolved_count(events: &[GameEvent], kind: EffectKind) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event, GameEvent::EffectResolved { kind: k, .. } if *k == kind))
+        .count()
+}
+
+fn cast_novel_nunchaku(mine_refuses: bool) -> NunchakuOutcome {
     let mut scenario = GameScenario::new();
     scenario.at_phase(Phase::PreCombatMain);
-    let mine = scenario.add_creature(P0, "mine", 3, 3).id();
+    let mut mine_builder = scenario.add_creature(P0, "mine", 3, 3);
+    if mine_refuses {
+        mine_builder.with_static(StaticMode::Other("CantBeEquipped".to_string()));
+    }
+    let mine = mine_builder.id();
     let theirs = scenario.add_creature(P1, "theirs", 2, 5).id();
     let nunchaku = scenario
         .add_artifact_to_hand_from_oracle(P0, "Novel Nunchaku", NOVEL_NUNCHAKU_ORACLE)
@@ -2737,6 +2749,7 @@ fn cast_novel_nunchaku() -> NunchakuOutcome {
     runner.cast(nunchaku).commit();
     let wants = [TargetRef::Object(mine), TargetRef::Object(theirs)];
     let mut target_prompts = 0;
+    let mut attach_resolutions = 0;
     let mut fights = 0;
     for _ in 0..60 {
         let result = match runner.state().waiting_for.clone() {
@@ -2759,22 +2772,12 @@ fn cast_novel_nunchaku() -> NunchakuOutcome {
             WaitingFor::Priority { .. } => runner.act(GameAction::PassPriority).expect("pass"),
             other => panic!("unexpected {other:?}"),
         };
-        fights += result
-            .events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event,
-                    GameEvent::EffectResolved {
-                        kind: EffectKind::Fight,
-                        ..
-                    }
-                )
-            })
-            .count();
+        fights += resolved_count(&result.events, EffectKind::Fight);
+        attach_resolutions += resolved_count(&result.events, EffectKind::Attach);
     }
     NunchakuOutcome {
         target_prompts,
+        attach_resolutions,
         fights,
         attached: live(&runner, nunchaku).attached_to.is_some(),
         theirs_damage: live(&runner, theirs).damage_marked,
@@ -2784,7 +2787,8 @@ fn cast_novel_nunchaku() -> NunchakuOutcome {
 /// CR 603.12 + CR 701.3b: "When you do" fires only if the attach was done.
 #[test]
 fn novel_nunchaku_refused_attach_has_no_reflexive_fight() {
-    let attached = cast_novel_nunchaku();
+    let attached = cast_novel_nunchaku(false);
+    assert_eq!(attached.attach_resolutions, 1);
     assert!(attached.attached);
     assert_eq!(
         attached.target_prompts, 1,
@@ -2793,10 +2797,27 @@ fn novel_nunchaku_refused_attach_has_no_reflexive_fight() {
     assert!(attached.fights > 0);
     assert_eq!(attached.theirs_damage, 4);
 
+    // CR 701.3b: the host is a legal target but can't be equipped, so Attach
+    // resolves and the Equipment doesn't move; CR 603.12: the reflexive "when
+    // you do" trigger never fires, so there is no fight target and no fight.
+    let refused = cast_novel_nunchaku(true);
+    assert_eq!(
+        refused.attach_resolutions, 1,
+        "Attach resolves against the refusing host"
+    );
+    assert!(!refused.attached);
+    assert_eq!(
+        refused.target_prompts, 0,
+        "the host is auto-selected and no reflexive fight slot exists"
+    );
+    assert_eq!(refused.fights, 0);
+    assert_eq!(refused.theirs_damage, 0);
+
     // CR 601.2c + CR 603.3d: with no "creature you control" the mandatory host
     // has no legal target, so the enters trigger is removed before it is put on
     // the stack; nothing attaches and the reflexive fight never exists.
     let no_host = cast_novel_nunchaku_without_a_host();
+    assert_eq!(no_host.attach_resolutions, 0, "the trigger never resolves");
     assert!(!no_host.attached);
     assert_eq!(no_host.target_prompts, 0, "no host means no target prompt");
     assert_eq!(no_host.fights, 0);
@@ -2820,6 +2841,7 @@ fn cast_novel_nunchaku_without_a_host() -> NunchakuOutcome {
     let mut runner = scenario.build();
     grant_priority(&mut runner, P0);
     runner.cast(nunchaku).commit();
+    let mut attach_resolutions = 0;
     let mut fights = 0;
     for _ in 0..60 {
         let result = match runner.state().waiting_for.clone() {
@@ -2831,22 +2853,12 @@ fn cast_novel_nunchaku_without_a_host() -> NunchakuOutcome {
             WaitingFor::Priority { .. } => runner.act(GameAction::PassPriority).expect("pass"),
             other => panic!("unexpected {other:?}"),
         };
-        fights += result
-            .events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event,
-                    GameEvent::EffectResolved {
-                        kind: EffectKind::Fight,
-                        ..
-                    }
-                )
-            })
-            .count();
+        fights += resolved_count(&result.events, EffectKind::Fight);
+        attach_resolutions += resolved_count(&result.events, EffectKind::Attach);
     }
     NunchakuOutcome {
         target_prompts: 0,
+        attach_resolutions,
         fights,
         attached: live(&runner, nunchaku).attached_to.is_some(),
         theirs_damage: live(&runner, theirs).damage_marked,

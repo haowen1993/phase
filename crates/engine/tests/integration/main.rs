@@ -1565,6 +1565,7 @@ mod untargeted_damage_recipient_chooser;
 mod until_next_step_deadline_durations;
 mod until_source_leaves_cr610_3a;
 mod until_source_leaves_cr610_3b;
+mod up_to_one_later_target_spells;
 mod urborg_scavengers_source_exiled_keyword_grant;
 mod ureni_attack_trigger;
 mod urge_to_feed_regression;
