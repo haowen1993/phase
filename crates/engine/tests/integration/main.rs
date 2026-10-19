@@ -213,6 +213,7 @@ mod cosmic_intervention_graveyard_redirect;
 mod cost_paid_objects_historical_restore;
 mod cost_paid_provenance;
 mod cost_reduction_order_election;
+mod cost_removed_counter_amount;
 mod cost_x_carrier_runtime;
 mod cost_zone_pipeline;
 mod council_of_four_nth_per_turn;
@@ -2039,6 +2040,7 @@ mod search_result_conditional_destination;
 mod search_result_missing_referent;
 
 mod celes_kotis_graveyard_origin_batch;
+mod put_target_count_entry_counters;
 mod squall_attack_batch_chosen_number;
 mod strago_cast_this_way_rider;
 mod tifa_additional_combat;
