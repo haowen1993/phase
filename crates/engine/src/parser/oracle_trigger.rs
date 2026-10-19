@@ -2096,7 +2096,7 @@ fn lower_trigger_effect_chain(
     // "draw a card. Attach any number of target Equipment ..."
     // CR 115.6 + CR 601.2c: an `Attach` clause owns its HOST quantifier through
     // the clause-level host capture (`imp::UtilityImperativeAst::Attach::
-    // host_optional`), not through a trigger-body scan. The old stamp let any
+    // host_target`), not through a trigger-body scan. The old stamp let any
     // later "up to one target" in the same trigger body mark a mandatory Attach
     // host optional (Hunter's Bow, Novel Nunchaku), so the resolver's declined-
     // host no-op made an illegal decline look legal.

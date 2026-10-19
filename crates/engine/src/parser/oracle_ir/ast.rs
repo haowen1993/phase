@@ -1600,14 +1600,14 @@ pub(crate) enum UtilityImperativeAst {
         /// `Effect::Attach.selection`; the HOST operand's timing stays the
         /// ability-level `TargetChoiceTiming`.
         selection: AttachSelection,
-        /// CR 115.6: the HOST operand prints an optional target ("attach this
-        /// Equipment to up to one target creature you control"). Captured here
-        /// — where the typed host phrase and the attachment operand's printed
-        /// role are both in scope — and mirrored onto
-        /// `ParsedEffectClause.optional_targeting`. Captured independently of
-        /// whether the ATTACHMENT operand claims an announced slot; the
-        /// trigger-body `has_up_to` stamp is gated separately for Attach.
-        host_optional: bool,
+        /// CR 115.6: the HOST operand's printed target-count spec ("attach this
+        /// Equipment to up to one target creature you control"). `None` means
+        /// the host is mandatory; `Some(spec)` keeps the count, not just a
+        /// boolean, and is mirrored onto `ParsedEffectClause.optional_targeting`.
+        /// Captured independently of whether the ATTACHMENT operand claims an
+        /// announced slot; the trigger-body `has_up_to` stamp is gated separately
+        /// for Attach.
+        host_target: Option<MultiTargetSpec>,
     },
     /// CR 608.2c (rules of English — number agreement) + CR 400.7: an Attach
     /// instruction whose ATTACHMENT operand is a plural anaphor ("attach
