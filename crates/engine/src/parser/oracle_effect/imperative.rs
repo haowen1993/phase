@@ -7132,13 +7132,16 @@ pub(super) fn parse_utility_imperative_ast(
             // typed host phrase and the attachment operand's printed role are both
             // in scope. When the ATTACHMENT operand itself claims an announced
             // slot, its printed quantifier is not the host's — decline.
-            let host_optional =
-                !crate::game::ability_utils::attach_attachment_claims_announcement_slot(
-                    &attachment,
-                    &selection,
-                ) && super::strip_optional_target_prefix(target_text.trim())
-                    .1
-                    .is_some();
+            // CR 115.6 + CR 601.2c: the HOST operand's zero-target authority is
+            // its own printed quantifier, independent of whether the ATTACHMENT
+            // operand claimed an announced slot. "attach target Equipment you
+            // control to up to one target creature you control" (Iron Hills
+            // Stalwart) has a required Equipment and an optional host; the old
+            // `!attach_attachment_claims_announcement_slot` gate dropped the
+            // host frame and let the trigger-wide `has_up_to` stamp stand in.
+            let host_optional = super::strip_optional_target_prefix(target_text.trim())
+                .1
+                .is_some();
             #[cfg(debug_assertions)]
             assert_no_compound_remainder(_attachment_rem, text);
             #[cfg(debug_assertions)]

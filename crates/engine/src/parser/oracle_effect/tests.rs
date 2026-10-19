@@ -22239,11 +22239,12 @@ fn thorin_attachment_operand_is_unlimited_and_the_rider_recovers_up_to_one() {
 }
 
 #[test]
-fn hunters_bow_and_novel_nunchaku_host_flags_are_a_labelled_over_application() {
-    // PIN (labelled, not a correctness claim): both cards' Attach heads print a
-    // MANDATORY host, yet the pre-existing trigger `has_up_to` stamp marks the
-    // execute optional. The new host capture writes nothing for them; the flag
-    // is the older stamp (residual D1/D2 class).
+fn hunters_bow_and_novel_nunchaku_hosts_are_mandatory() {
+    // CR 115.6 + CR 601.2c: both Attach heads print a MANDATORY host ("attach it
+    // to target creature you control"). The clause-level host capture writes
+    // nothing for them, and the trigger `has_up_to` stamp no longer stands in for
+    // an Attach host, so the execute is not optional (Hunter's Bow's later damage
+    // clause and Novel Nunchaku's reflexive fight do not make the host optional).
     for (name, text) in [
         (
             "Hunter's Bow",
@@ -22258,13 +22259,10 @@ fn hunters_bow_and_novel_nunchaku_host_flags_are_a_labelled_over_application() {
         let defs = all_ability_defs(&parsed);
         let attaches = attach_defs(&defs);
         assert_eq!(attaches.len(), 1, "{name}: {defs:#?}");
-        assert!(attaches[0].optional_targeting, "{name}: {:#?}", attaches[0]);
+        assert!(!attaches[0].optional_targeting, "{name}: {:#?}", attaches[0]);
         assert_eq!(attaches[0].multi_target, None, "{name}");
-        // The chosen-host path still resolves; the flag's decline consequence is
-        // exercised by the runtime regressions.
     }
 }
-
 #[test]
 fn aerial_formation_keeps_its_unlimited_spec_and_no_host_flag() {
     let clause = parse_effect_clause(

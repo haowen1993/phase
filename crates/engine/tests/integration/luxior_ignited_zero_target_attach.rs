@@ -670,16 +670,11 @@ fn assassin_gauntlet_etb_declined_host_stays_unattached() {
 }
 
 #[test]
-fn hunters_bow_decline_with_mandatory_host_is_a_silent_no_op() {
-    // LABELLED over-application (residual): Hunter's Bow prints a MANDATORY host
-    // ("attach it to target creature you control"), but the pre-existing trigger
-    // `has_up_to` stamp marks the execute optional. The declined host therefore
-    // reaches the resolver; before the no-op it errored `MissingParam`, and now
-    // it does nothing (CR 115.6 + CR 608.2c). The damage rider has no legal
-    // "creature you don't control" either, so nothing happens.
+fn hunters_bow_without_a_legal_host_removes_the_trigger() {
+    // CR 115.6 + CR 601.2c + CR 603.3d: the host is mandatory, and this board has
+    // no creature it could target, so the enters trigger is removed rather than
+    // resolving as a declined/no-op Attach.
     let outcome = cast_equipment_declined("Hunter's Bow", HUNTERS_BOW_ORACLE);
-    // Locate the equipment again via the event source: we only need its identity
-    // to assert the unattached state, so re-create the same query from state.
     let unequipped = outcome
         .state()
         .objects
@@ -688,11 +683,12 @@ fn hunters_bow_decline_with_mandatory_host_is_a_silent_no_op() {
         .all(|object| object.attached_to.is_none());
     assert!(
         unequipped,
-        "the declined Attach must leave the Equipment unattached"
+        "the Equipment must stay unattached when the trigger is removed"
     );
     assert!(
-        attach_effect_resolved(&outcome),
-        "the declined Attach resolves"
+        !attach_effect_resolved(&outcome),
+        "no Attach instruction may resolve: {:?}",
+        outcome.events()
     );
     assert!(matches!(
         outcome.final_waiting_for(),
@@ -712,11 +708,11 @@ fn hunters_bow_decline_with_mandatory_host_is_a_silent_no_op() {
     let chosen = chosen_runner.cast(bow).target_object(mine).resolve();
     assert_eq!(attached_object(&chosen, bow), Some(mine));
 }
-
 #[test]
-fn novel_nunchaku_decline_with_mandatory_host_is_a_silent_no_op() {
-    // Same labelled over-application as Hunter's Bow. The "When you do" reflexive
-    // fight never fires because nothing became attached.
+fn novel_nunchaku_without_a_legal_host_removes_the_trigger() {
+    // CR 115.6 + CR 601.2c + CR 603.3d: mandatory host, no legal creature on the
+    // board, so the enters trigger is removed; no Attach resolves and the "When
+    // you do" reflexive fight never triggers.
     let mut scenario = GameScenario::new();
     scenario.at_phase(Phase::PreCombatMain);
     let nunchaku = scenario
@@ -727,7 +723,11 @@ fn novel_nunchaku_decline_with_mandatory_host_is_a_silent_no_op() {
     grant_priority(&mut runner, P0);
     let declined = runner.cast(nunchaku).resolve();
     assert_eq!(attached_object(&declined, nunchaku), None);
-    assert!(attach_effect_resolved(&declined));
+    assert!(
+        !attach_effect_resolved(&declined),
+        "no Attach instruction may resolve: {:?}",
+        declined.events()
+    );
     assert!(
         !declined.events().iter().any(|event| matches!(
             event,
@@ -758,7 +758,6 @@ fn novel_nunchaku_decline_with_mandatory_host_is_a_silent_no_op() {
     let chosen = chosen_runner.cast(nunchaku).target_object(mine).resolve();
     assert_eq!(attached_object(&chosen, nunchaku), Some(mine));
 }
-
 // ---------------------------------------------------------------------------
 // Serene Remembrance — the compound-shuffle second subject
 // ---------------------------------------------------------------------------
@@ -813,8 +812,22 @@ fn stolen_goodies_accepts_at_most_three_targets() {
     let mut runner = scenario.build();
     grant_priority(&mut runner, P0);
     // Four legal creatures are declared; the printed {0,3} spec caps the
-    // announced set at three, so the fourth must receive nothing.
-    let outcome = runner.cast(goodies).target_objects(&creatures).resolve();
+    // ANNOUNCED set at three (CR 601.2c), so the committed stack entry may carry
+    // only three targets.
+    let commit = runner.cast(goodies).target_objects(&creatures).commit();
+    let ability = commit
+        .state()
+        .stack
+        .last()
+        .and_then(|entry| entry.ability())
+        .expect("the committed spell carries its ability");
+    assert_eq!(
+        ability.targets.len(),
+        3,
+        "the {{0,3}} spec caps the announced set at three: {:?}",
+        ability.targets
+    );
+    let outcome = commit.resolve();
     let counters: Vec<u32> = creatures
         .iter()
         .map(|creature| counters_of(&outcome, *creature, &CounterType::Plus1Plus1))
