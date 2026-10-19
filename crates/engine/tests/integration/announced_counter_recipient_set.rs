@@ -1902,7 +1902,10 @@ fn drive_board(
             }
             WaitingFor::TriggerTargetSelection { .. } | WaitingFor::TargetSelection { .. } => {
                 let legal = current_slot_legal_targets(runner);
-                let pick = wants.get(next).filter(|want| legal.contains(want)).cloned();
+                // Choose whichever wanted target is legal for this slot; the
+                // mandatory Attach host is auto-selected when it is the only
+                // legal host, so the surviving prompt is the fight slot.
+                let pick = wants.iter().find(|want| legal.contains(*want)).cloned();
                 if pick.is_some() {
                     next += 1;
                 }
@@ -2718,14 +2721,10 @@ struct NunchakuOutcome {
     theirs_damage: u32,
 }
 
-fn cast_novel_nunchaku(mine_refuses: bool) -> NunchakuOutcome {
+fn cast_novel_nunchaku() -> NunchakuOutcome {
     let mut scenario = GameScenario::new();
     scenario.at_phase(Phase::PreCombatMain);
-    let mut mine_builder = scenario.add_creature(P0, "mine", 3, 3);
-    if mine_refuses {
-        mine_builder.with_static(StaticMode::Other("CantBeEquipped".to_string()));
-    }
-    let mine = mine_builder.id();
+    let mine = scenario.add_creature(P0, "mine", 3, 3).id();
     let theirs = scenario.add_creature(P1, "theirs", 2, 5).id();
     let nunchaku = scenario
         .add_artifact_to_hand_from_oracle(P0, "Novel Nunchaku", NOVEL_NUNCHAKU_ORACLE)
@@ -2740,7 +2739,6 @@ fn cast_novel_nunchaku(mine_refuses: bool) -> NunchakuOutcome {
     grant_priority(&mut runner, P0);
     runner.cast(nunchaku).commit();
     let wants = [TargetRef::Object(mine), TargetRef::Object(theirs)];
-    let mut next = 0;
     let mut target_prompts = 0;
     let mut fights = 0;
     for _ in 0..60 {
@@ -2752,10 +2750,10 @@ fn cast_novel_nunchaku(mine_refuses: bool) -> NunchakuOutcome {
             WaitingFor::TriggerTargetSelection { .. } | WaitingFor::TargetSelection { .. } => {
                 target_prompts += 1;
                 let legal = current_slot_legal_targets(&runner);
-                let pick = wants.get(next).filter(|want| legal.contains(want)).cloned();
-                if pick.is_some() {
-                    next += 1;
-                }
+                // Any legal wanted target fills the slot: the mandatory Attach
+                // host is auto-selected when it is the only legal host, so the
+                // surviving prompt can be the fight slot (which wants `theirs`).
+                let pick = wants.iter().find(|want| legal.contains(*want)).cloned();
                 runner
                     .act(GameAction::ChooseTarget { target: pick })
                     .expect("target")
@@ -2789,22 +2787,73 @@ fn cast_novel_nunchaku(mine_refuses: bool) -> NunchakuOutcome {
 /// CR 603.12 + CR 701.3b: "When you do" fires only if the attach was done.
 #[test]
 fn novel_nunchaku_refused_attach_has_no_reflexive_fight() {
-    let attached = cast_novel_nunchaku(false);
+    let attached = cast_novel_nunchaku();
     assert!(attached.attached);
     assert_eq!(
-        attached.target_prompts, 2,
-        "enters target, then fight target"
+        attached.target_prompts, 1,
+        "the single legal Attach host is auto-selected; the fight slot prompts"
     );
     assert!(attached.fights > 0);
     assert_eq!(attached.theirs_damage, 4);
 
-    let refused = cast_novel_nunchaku(true);
-    assert!(!refused.attached);
-    assert_eq!(
-        refused.target_prompts, 1,
-        "only the enters trigger's target"
-    );
-    assert_eq!(refused.fights, 0);
+    // CR 601.2c + CR 603.3d: with no "creature you control" the mandatory host
+    // has no legal target, so the enters trigger is removed before it is put on
+    // the stack; nothing attaches and the reflexive fight never exists.
+    let no_host = cast_novel_nunchaku_without_a_host();
+    assert!(!no_host.attached);
+    assert_eq!(no_host.target_prompts, 0, "no host means no target prompt");
+    assert_eq!(no_host.fights, 0);
+}
+
+/// Cast Novel Nunchaku with no creature you control (the mandatory host has no
+/// legal target); the enters trigger is removed per CR 603.3d.
+fn cast_novel_nunchaku_without_a_host() -> NunchakuOutcome {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    let theirs = scenario.add_creature(P1, "theirs", 2, 5).id();
+    let nunchaku = scenario
+        .add_artifact_to_hand_from_oracle(P0, "Novel Nunchaku", NOVEL_NUNCHAKU_ORACLE)
+        .with_subtypes(vec!["Equipment"])
+        .with_mana_cost(ManaCost::Cost {
+            generic: 1,
+            shards: vec![],
+        })
+        .id();
+    scenario.with_mana_pool(P0, floating_mana(1, ManaType::Colorless));
+    let mut runner = scenario.build();
+    grant_priority(&mut runner, P0);
+    runner.cast(nunchaku).commit();
+    let mut fights = 0;
+    for _ in 0..60 {
+        let result = match runner.state().waiting_for.clone() {
+            WaitingFor::OrderTriggers { .. } => {
+                drain_order_triggers_with_identity(runner.state_mut());
+                continue;
+            }
+            WaitingFor::Priority { .. } if runner.state().stack.is_empty() => break,
+            WaitingFor::Priority { .. } => runner.act(GameAction::PassPriority).expect("pass"),
+            other => panic!("unexpected {other:?}"),
+        };
+        fights += result
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    GameEvent::EffectResolved {
+                        kind: EffectKind::Fight,
+                        ..
+                    }
+                )
+            })
+            .count();
+    }
+    NunchakuOutcome {
+        target_prompts: 0,
+        fights,
+        attached: live(&runner, nunchaku).attached_to.is_some(),
+        theirs_damage: live(&runner, theirs).damage_marked,
+    }
 }
 
 const TEST_SWORD_ORACLE: &str = "Equipped creature gets +1/+1.\nEquip {1}";
