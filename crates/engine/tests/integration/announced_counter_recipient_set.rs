@@ -1902,10 +1902,7 @@ fn drive_board(
             }
             WaitingFor::TriggerTargetSelection { .. } | WaitingFor::TargetSelection { .. } => {
                 let legal = current_slot_legal_targets(runner);
-                // Choose whichever wanted target is legal for this slot; the
-                // mandatory Attach host is auto-selected when it is the only
-                // legal host, so the surviving prompt is the fight slot.
-                let pick = wants.iter().find(|want| legal.contains(*want)).cloned();
+                let pick = wants.get(next).filter(|want| legal.contains(want)).cloned();
                 if pick.is_some() {
                     next += 1;
                 }
