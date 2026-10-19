@@ -1604,9 +1604,9 @@ pub(crate) enum UtilityImperativeAst {
         /// Equipment to up to one target creature you control"). Captured here
         /// — where the typed host phrase and the attachment operand's printed
         /// role are both in scope — and mirrored onto
-        /// `ParsedEffectClause.optional_targeting`. False when the ATTACHMENT
-        /// operand itself claims an announced slot: its printed count would
-        /// otherwise be read as the host's.
+        /// `ParsedEffectClause.optional_targeting`. Captured independently of
+        /// whether the ATTACHMENT operand claims an announced slot; the
+        /// trigger-body `has_up_to` stamp is gated separately for Attach.
         host_optional: bool,
     },
     /// CR 608.2c (rules of English — number agreement) + CR 400.7: an Attach

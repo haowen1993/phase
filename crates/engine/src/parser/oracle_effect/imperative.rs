@@ -15704,8 +15704,9 @@ pub(super) fn lower_imperative_family_ast(ast: ImperativeFamilyAst) -> ParsedEff
             });
             clause.multi_target = multi_target;
             // CR 115.6: the Attach HOST frame's printed "up to one target …".
-            // This is the ONLY writer of `optional_targeting` in the parser; the
-            // generalized clause-count detector never touches it. Barret,
+            // The ONLY writer of `optional_targeting` for an Attach clause (the
+            // generalized clause-count detector never touches it; the trigger
+            // stamp has its own `Effect::Attach` guard). Barret,
             // Avalanche Leader / Thorin, Mountain-King print no host quantifier,
             // so the capture writes nothing for them (their optional operand is
             // the attachment, carried by `multi_target`).

@@ -6352,7 +6352,9 @@ pub(crate) fn attach_attachment_claims_announcement_slot(
 /// "attach target Equipment you control to up to one target creature you control"
 /// has a REQUIRED Equipment and an OPTIONAL host. The attachment's authority is
 /// its own `multi_target` spec — min 0 permits choosing zero Equipment —
-/// and the absence of a spec means the printed attachment target is required.
+/// and the absence of a spec means the printed attachment target is required,
+/// unless the host operand surfaces no slot at all (then `optional_targeting`
+/// governs the only declaration — the generic optional-declaration shape).
 fn attach_attachment_targeting_is_optional(ability: &ResolvedAbility) -> bool {
     if let Some(spec) = ability.multi_target.as_ref() {
         return spec.min_is_fixed_zero();
@@ -6584,7 +6586,10 @@ fn assign_attach_attachment_declared_targets(
     let Some(bounds) = attach_attachment_slot_bounds(state, ability, attachment, selection)? else {
         return Ok(());
     };
-    let allow_skip = ability.targeting_is_optional();
+    // CR 601.2c: the attachment window's skip authority is the ATTACHMENT
+    // operand's spec, not the host frame; a required attachment must not be
+    // silently skipped on a short declared-target list.
+    let allow_skip = attach_attachment_targeting_is_optional(ability);
     if ability.multi_target.is_some() {
         let remaining = targets.len().saturating_sub(*next_target);
         let host_reserved =
@@ -12789,7 +12794,8 @@ fn minimum_targets_in_chain(state: &GameState, ability: &ResolvedAbility) -> usi
     } = &ability.effect
     {
         // CR 601.2c: each operand reserves its own minimum. The attachment slot
-        // is required unless its spec permits zero; the host slot is required
+        // is required unless its spec permits zero (or the host surfaces no slot
+        // and the generic declaration is optional); the host slot is required
         // unless the host frame (`optional_targeting`) permits none.
         usize::from(
             attach_side_needs_target_slot(attachment, true, selection)
