@@ -5726,25 +5726,60 @@ mod tests {
             target: TargetFilter::Any,
             selection: AttachSelection::Targeted,
         };
-        let attachment_only = ResolvedAbility::new(
+        // Production tier (CR 601.2c): the trigger binds the chosen attachment,
+        // so `resolve_attachment_ids` short-circuits without advancing the
+        // iterator; only the bound-id exclusion keeps the Equipment out of the
+        // host evidence.
+        let mut attachment_only = ResolvedAbility::new(
             effect.clone(),
             vec![TargetRef::Object(equipment)],
             equipment,
             PlayerId(0),
         );
+        attachment_only.set_attach_attachment_targets(vec![ObjectIncarnationRef::from_object(
+            &state.objects[&equipment],
+        )]);
         assert!(
             !host_slot_announced(&state, &attachment_only, &TargetFilter::Any),
-            "the consumed attachment slot is not host evidence"
+            "the bound attachment slot is not host evidence"
         );
-        let with_host = ResolvedAbility::new(
+        let mut with_host = ResolvedAbility::new(
             effect,
             vec![TargetRef::Object(equipment), TargetRef::Object(bystander)],
             equipment,
             PlayerId(0),
         );
+        with_host.set_attach_attachment_targets(vec![ObjectIncarnationRef::from_object(
+            &state.objects[&equipment],
+        )]);
         assert!(
             host_slot_announced(&state, &with_host, &TargetFilter::Any),
             "a target beyond the attachment window is host evidence"
+        );
+
+        // Defensive fallback: a bound attachment that no longer matches the
+        // attachment filter resolves empty, so the bound-id fallback must still
+        // exclude it from host evidence.
+        let plain = spawn_equipment(&mut state, "Plain Relic", 911);
+        let mut stale_binding = ResolvedAbility::new(
+            Effect::Attach {
+                attachment: TargetFilter::Typed(TypedFilter {
+                    type_filters: vec![TypeFilter::Creature],
+                    ..Default::default()
+                }),
+                target: TargetFilter::Any,
+                selection: AttachSelection::Targeted,
+            },
+            vec![TargetRef::Object(plain)],
+            plain,
+            PlayerId(0),
+        );
+        stale_binding.set_attach_attachment_targets(vec![ObjectIncarnationRef::from_object(
+            &state.objects[&plain],
+        )]);
+        assert!(
+            !host_slot_announced(&state, &stale_binding, &TargetFilter::Any),
+            "a bound id that no longer matches the attachment filter is not host evidence"
         );
     }
 }

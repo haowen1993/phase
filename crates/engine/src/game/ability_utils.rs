@@ -6354,10 +6354,20 @@ pub(crate) fn attach_attachment_claims_announcement_slot(
 /// its own `multi_target` spec — min 0 permits choosing zero Equipment —
 /// and the absence of a spec means the printed attachment target is required.
 fn attach_attachment_targeting_is_optional(ability: &ResolvedAbility) -> bool {
-    ability
-        .multi_target
-        .as_ref()
-        .is_some_and(|spec| spec.min_is_fixed_zero())
+    if let Some(spec) = ability.multi_target.as_ref() {
+        return spec.min_is_fixed_zero();
+    }
+    // No attachment spec: a printed attachment target is required UNLESS the
+    // host operand surfaces no slot of its own. With no host slot, the
+    // ability-wide declaration is the only target authority (the generic
+    // optional-declaration shape exercised by the dig-binding tests); with a
+    // host slot, the flag is the HOST frame and must not relax the attachment.
+    match &ability.effect {
+        Effect::Attach { target, .. } => {
+            !attach_host_filter_needs_target_slot(target) && ability.optional_targeting
+        }
+        _ => false,
+    }
 }
 
 fn attach_side_needs_target_slot(

@@ -13,9 +13,12 @@
 //!   target cannot be announced).
 //! * `The Aetherspark` `[+1]` and `Sting, Bilbo's Sword`'s enters trigger have the
 //!   same printed host; `Sting` additionally showed the lost counter rider.
-//! * `Assassin Gauntlet`, `Hunter's Bow` and `Novel Nunchaku` reach the resolver
-//!   with a declined host and previously errored with `MissingParam`; the
+//! * `Assassin Gauntlet` reaches the resolver with a declined host (printed
+//!   "up to one target") and previously errored with `MissingParam`; the
 //!   declined host is now a resolution no-op (CR 115.6 + CR 608.2c).
+//! * `Hunter's Bow` and `Novel Nunchaku` print a MANDATORY host; with no legal
+//!   creature the enters trigger is removed (CR 603.3d), so no Attach resolves.
+//!   (The trigger-wide `has_up_to` stamp no longer marks an Attach host optional.)
 //!
 //! D4 (pre-existing, labelled, NOT fixed here): `Serene Remembrance`'s "from a
 //! single graveyard" constraint parses as a target-set constraint on the
@@ -612,11 +615,12 @@ fn attached_object_by_state(runner: &GameRunner, id: ObjectId) -> Option<ObjectI
 }
 
 // ---------------------------------------------------------------------------
-// Declined-host regressions for the Attach host class
+// No-legal-host and declined-host regressions for the Attach host class
 // ---------------------------------------------------------------------------
 
-/// Cast an Equipment from hand and drive its enters trigger with no host intent
-/// (the driver declines the optional host slot).
+/// Cast an Equipment from hand and drive its enters trigger with no host on the
+/// board (an optional host is declined; a mandatory host removes the trigger per
+/// CR 603.3d).
 fn cast_equipment_declined(name: &str, oracle: &str) -> Outcome {
     let mut scenario = GameScenario::new();
     scenario.at_phase(Phase::PreCombatMain);

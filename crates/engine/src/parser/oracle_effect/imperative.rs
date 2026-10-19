@@ -7128,10 +7128,6 @@ pub(super) fn parse_utility_imperative_ast(
             let (attachment, _attachment_rem) = parse_attachment_anaphor(&attachment_text, ctx);
             let (target, _target_rem) =
                 parse_attach_recipient(&target_text, ctx, Some(&attachment));
-            // CR 115.6: capture the HOST operand's optionality here, where the
-            // typed host phrase and the attachment operand's printed role are both
-            // in scope. When the ATTACHMENT operand itself claims an announced
-            // slot, its printed quantifier is not the host's — decline.
             // CR 115.6 + CR 601.2c: the HOST operand's zero-target authority is
             // its own printed quantifier, independent of whether the ATTACHMENT
             // operand claimed an announced slot. "attach target Equipment you
@@ -15709,9 +15705,10 @@ pub(super) fn lower_imperative_family_ast(ast: ImperativeFamilyAst) -> ParsedEff
             clause.multi_target = multi_target;
             // CR 115.6: the Attach HOST frame's printed "up to one target …".
             // This is the ONLY writer of `optional_targeting` in the parser; the
-            // generalized clause-count detector never touches it. Gated by the
-            // host capture, which declines when the ATTACHMENT operand claims an
-            // announced slot (Barret, Avalanche Leader / Thorin, Mountain-King).
+            // generalized clause-count detector never touches it. Barret,
+            // Avalanche Leader / Thorin, Mountain-King print no host quantifier,
+            // so the capture writes nothing for them (their optional operand is
+            // the attachment, carried by `multi_target`).
             clause.optional_targeting = host_optional;
             clause
         }
