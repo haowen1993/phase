@@ -2719,6 +2719,18 @@ struct NunchakuOutcome {
     theirs_damage: u32,
 }
 
+/// The drive loop is capped: prove it stopped because resolution completed
+/// (empty stack at Priority), not because it ran out of iterations.
+fn assert_settled_at_priority(runner: &GameRunner) {
+    assert!(
+        runner.state().stack.is_empty()
+            && matches!(runner.state().waiting_for, WaitingFor::Priority { .. }),
+        "Novel Nunchaku did not finish resolving: {:?} (stack depth {})",
+        runner.state().waiting_for,
+        runner.state().stack.len()
+    );
+}
+
 fn resolved_count(events: &[GameEvent], kind: EffectKind) -> usize {
     events
         .iter()
@@ -2775,6 +2787,7 @@ fn cast_novel_nunchaku(mine_refuses: bool) -> NunchakuOutcome {
         fights += resolved_count(&result.events, EffectKind::Fight);
         attach_resolutions += resolved_count(&result.events, EffectKind::Attach);
     }
+    assert_settled_at_priority(&runner);
     NunchakuOutcome {
         target_prompts,
         attach_resolutions,
@@ -2856,6 +2869,7 @@ fn cast_novel_nunchaku_without_a_host() -> NunchakuOutcome {
         fights += resolved_count(&result.events, EffectKind::Fight);
         attach_resolutions += resolved_count(&result.events, EffectKind::Attach);
     }
+    assert_settled_at_priority(&runner);
     NunchakuOutcome {
         target_prompts: 0,
         attach_resolutions,
