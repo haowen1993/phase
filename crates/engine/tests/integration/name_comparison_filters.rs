@@ -3,8 +3,10 @@
 //! <reference>` in target/search filter positions.
 //!
 //! This file owns the SAGA-CHAPTER targeting row of that class — The
-//! Apprentice's Folly — because no existing file drives a Saga chapter that
-//! *targets*. Its siblings live with the cards whose plumbing they share:
+//! Apprentice's Folly — because the existing Saga-chapter drivers are
+//! module-private to their own test files, so this row carries its own park
+//! and chapter driver below. Its siblings live with the cards whose plumbing
+//! they share:
 //! Curse of Misfortunes' search rows are in
 //! `issue_5290_curse_misfortunes_upkeep.rs` and Yenna's activated-ability rows
 //! are in `s07_b3_target_identity.rs`, so the shared resolve/search/activation
