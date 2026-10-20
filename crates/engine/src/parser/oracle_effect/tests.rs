@@ -17483,7 +17483,7 @@ fn parse_search_aura_with_mana_value_and_different_name() {
     }
 }
 
-/// CR 201.2a + CR 608.2c: Herald of Vengeance — "When Herald of Vengeance
+/// CR 201.2a: Herald of Vengeance — "When Herald of Vengeance
 /// enters the battlefield, destroy each permanent you don't control that has
 /// the same name as a permanent that dealt damage to you last turn."
 ///

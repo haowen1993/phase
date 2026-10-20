@@ -2004,7 +2004,7 @@ fn precedes_core_type_word(haystack: &str, end: usize) -> bool {
     .any(|word| is_core_type_name(word))
 }
 
-/// CR 303.4b + CR 303.4m + CR 205.3j: A subtype-word occurrence immediately
+/// CR 303.4b + CR 303.4m + CR 205.3h: A subtype-word occurrence immediately
 /// followed by the attachment qualifier " attached to " is a TYPE reference
 /// ("a Curse attached to enchanted player" — Curse of Misfortunes' reference
 /// population; CR 303.4b defines the object or player an Aura is attached to as
@@ -4320,7 +4320,7 @@ mod tests {
 
     #[test]
     fn normalize_of_short_name_normalizes_subtype_outside_type_reference() {
-        // CR 201.3a: the same subtype-word short name DOES normalize when the
+        // CR 201.5 + CR 201.5c: the same subtype-word short name DOES normalize when the
         // occurrence is a genuine subject reference ("Whenever a Curse is put
         // into a graveyard …" = this card). Paired with
         // `normalize_of_short_name_curse_of_misfortunes_keeps_type_references_literal`,
