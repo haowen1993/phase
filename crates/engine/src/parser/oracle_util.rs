@@ -1977,7 +1977,7 @@ fn precedes_type_addition_clause(haystack: &str, end: usize) -> bool {
 /// condition on Gideon of the Trials' emblem) can read the subtype.
 /// Per-occurrence sibling of `precedes_type_addition_clause`.
 ///
-/// CR 205.2a + CR 205.3h + CR 109.2a: the informational "card"/"spell" nouns are
+/// CR 205.2a + CR 205.3h + CR 109.2a / CR 109.2b: the informational "card"/"spell" nouns are
 /// core-type names in this vocabulary (`is_core_type_name`) and ARE type
 /// references here — "a Curse card" names the searched card's subtype exactly
 /// like "a Gideon planeswalker" names the planeswalker type. They are therefore
@@ -3526,7 +3526,7 @@ mod tests {
 
     #[test]
     fn normalize_of_short_name_curse_of_misfortunes_keeps_type_references_literal() {
-        // CR 205.3j + CR 201.3a: Curse of Misfortunes — the sensitive sibling
+        // CR 205.3h + CR 201.5 + CR 201.5c: Curse of Misfortunes — the sensitive sibling
         // the of-branch guard comment names. Both occurrences are TYPE
         // references: "a Curse card" is the searched noun phrase's subtype (the
         // informational "card" noun is a type reference by grammar, not a name
