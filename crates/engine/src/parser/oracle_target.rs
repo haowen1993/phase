@@ -24,7 +24,8 @@ use crate::types::mana::ManaColor;
 use crate::types::zones::Zone;
 
 use super::oracle_effect::{
-    is_bare_object_pronoun, parse_multi_target_count_expr, resolve_it_pronoun,
+    is_bare_object_pronoun, parse_multi_target_count_expr, parse_search_name_reference_suffix,
+    resolve_it_pronoun,
 };
 use super::oracle_ir::context::{bind_controller_phrase, ChosenColorQualifierScope, ParseContext};
 use super::oracle_ir::diagnostic::OracleDiagnostic;
@@ -3609,6 +3610,27 @@ pub fn parse_type_phrase_folding_with_ctx<'a>(
             &mut controller,
             ctx,
         );
+    }
+
+    // CR 109.2 + CR 303.4b + CR 303.4m: "<type> attached to enchanted player" —
+    // a postnominal attachment qualifier on the noun phrase, parallel to
+    // "you control". The referent is SELF-referential (what THIS source is
+    // attached to), so it is a typed `FilterProp` inside the filter rather than a
+    // per-clause binding: only the self-referential player form is accepted here.
+    // The anaphoric OBJECT referents ("attached to it"/"that creature") stay with
+    // the effect layer's `opens_attachment_qualifier` fail-closed path, which
+    // binds recipient/declared-slot per clause; widening this arm to them would
+    // silently drop that binding.
+    {
+        let after_ws = lower[pos..].trim_start();
+        let ws = lower[pos..].len() - after_ws.len();
+        // The phrase lives in exactly one place — the shared referent map's tail
+        // combinator — so the type phrase and the quantity/condition count sites
+        // cannot drift.
+        if let Ok((rest, prop)) = nom_quantity::parse_enchanted_player_attachment_tail(after_ws) {
+            properties.push(prop);
+            pos += ws + (after_ws.len() - rest.len());
+        }
     }
 
     // CR 700.9 (modified) + CR 109.4 (control): "<typed filter> other than ~"
@@ -9053,6 +9075,8 @@ pub(crate) fn parse_bare_was_dealt_damage_suffix(text: &str) -> Option<(FilterPr
 ///
 /// Handles multiple pattern classes:
 /// - "that share(s) [a] [quality]" → `SharesQuality`
+/// - CR 201.2a + CR 201.2c: "that doesn't have the same name as <reference>" →
+///   negated name `SharesQuality` (the affirmative frame is refused)
 /// - CR 120.6 + CR 120.9: "that was dealt damage this turn" → `WasDealtDamageThisTurn`
 /// - CR 400.7: "that entered (the battlefield) this turn" → `EnteredThisTurn`
 /// - CR 508.1a: "that attacked this turn" → `AttackedThisTurn`
@@ -9113,6 +9137,37 @@ pub(crate) fn parse_that_clause_suffix<'a>(
     if let Ok((rest, prop)) = parse_shared_quality_clause(trimmed, ctx) {
         let consumed = trimmed.len() - rest.len();
         return Some((vec![prop], leading_ws + consumed));
+    }
+
+    // CR 201.2a + CR 201.2c: "<filter> that doesn't have the same name as
+    // <reference>" — the NEGATED name relation in a filter position (Curse of
+    // Misfortunes, Yenna Redtooth Regent, The Apprentice's Folly). The relation
+    // x verb product and the reference-axis grammar are delegated to the single
+    // authority in `oracle_effect::search`; this arm contributes only the
+    // filter-position frame and the class scope, so every caller of
+    // `parse_that_clause_suffix` (type-phrase target/search filters, the
+    // `except those that` complement leg, spell-qualifier and static readers)
+    // sees the same typed value.
+    //
+    // CR 201.2a: the AFFIRMATIVE frame "<filter> that has/have the same name as
+    // <reference>" is NOT this class. In a filter a `Shares` name comparison is
+    // self-satisfied by the compared object, i.e. a constraint that can never
+    // fail; the affirmative grammar belongs to trigger / spell-qualifier
+    // positions (Pyromancer Ascension's post-spell modifier) which parse it on
+    // their own paths. The typed gate below refuses anything whose relation is
+    // not `DoesNotShare`, so Herald of Vengeance's destroy filter keeps its
+    // existing parse instead of gaining a vacuous prop.
+    if let Ok((rest, prop)) = parse_search_name_reference_suffix(trimmed) {
+        if matches!(
+            &prop,
+            FilterProp::SharesQuality {
+                relation: SharedQualityRelation::DoesNotShare,
+                ..
+            }
+        ) {
+            let consumed = trimmed.len() - rest.len();
+            return Some((vec![prop], leading_ws + consumed));
+        }
     }
 
     let (after_that, _) = tag::<_, _, OracleError<'_>>("that ").parse(trimmed).ok()?;
@@ -20939,6 +20994,225 @@ mod tests {
             tf.properties
         );
         assert_eq!(tf.controller, Some(ControllerRef::You));
+    }
+
+    /// CR 201.2a + CR 201.2c: the NEGATED name relation in a TARGET-filter
+    /// position — Yenna, Redtooth Regent: "Choose target enchantment you
+    /// control that doesn't have the same name as another permanent you
+    /// control." The relative-clause authority delegates the relation x verb
+    /// product and the reference-axis grammar to `oracle_effect::search` and
+    /// keeps only the results whose typed relation is `DoesNotShare`.
+    ///
+    /// The reference population is "another permanent you control" — every
+    /// permanent the controller controls except the compared object itself
+    /// (`FilterProp::Another`), restricted to the battlefield (CR 109.2). A
+    /// same-named NON-enchantment therefore also disqualifies the candidate,
+    /// which is what makes this building-block test discriminating.
+    #[test]
+    fn parse_that_clause_suffix_negated_name_clause_yenna_reference() {
+        let ctx = ParseContext::default();
+        let clause = " that doesn't have the same name as another permanent you control";
+        let (props, consumed) =
+            parse_that_clause_suffix(clause, Some(&ctx)).expect("negated name clause must parse");
+        assert_eq!(consumed, clause.len(), "the whole clause must be consumed");
+        assert_eq!(props.len(), 1, "expected exactly one prop, got {props:?}");
+        let FilterProp::SharesQuality {
+            quality,
+            reference,
+            relation,
+        } = &props[0]
+        else {
+            panic!("expected SharesQuality, got {:?}", props[0]);
+        };
+        assert_eq!(*quality, SharedQuality::Name);
+        assert_eq!(*relation, SharedQualityRelation::DoesNotShare);
+        let reference = reference.as_ref().expect("reference population");
+        let TargetFilter::Typed(tf) = &**reference else {
+            panic!("expected Typed reference, got {reference:?}");
+        };
+        assert!(
+            tf.type_filters.contains(&TypeFilter::Permanent),
+            "reference must be every permanent, got {:?}",
+            tf.type_filters
+        );
+        assert_eq!(tf.controller, Some(ControllerRef::You));
+        assert!(
+            tf.properties.contains(&FilterProp::Another),
+            "\"another\" must exclude the compared object itself, got {:?}",
+            tf.properties
+        );
+        assert!(
+            tf.properties
+                .iter()
+                .any(|p| matches!(p, FilterProp::InZone { zone } if *zone == Zone::Battlefield)),
+            "the reference population is battlefield-only (CR 109.2), got {:?}",
+            tf.properties
+        );
+    }
+
+    /// CR 201.2a + CR 201.2c: the same negated relation with a TOKEN reference —
+    /// The Apprentice's Folly: "Choose target nontoken creature you control
+    /// that doesn't have the same name as a token you control." `Token` is a
+    /// `FilterProp`, not a `TypeFilter`, so the reference type list is empty.
+    #[test]
+    fn parse_that_clause_suffix_negated_name_clause_token_reference() {
+        let ctx = ParseContext::default();
+        let clause = " that doesn't have the same name as a token you control";
+        let (props, consumed) =
+            parse_that_clause_suffix(clause, Some(&ctx)).expect("negated name clause must parse");
+        assert_eq!(consumed, clause.len(), "the whole clause must be consumed");
+        let FilterProp::SharesQuality {
+            reference,
+            relation,
+            ..
+        } = &props[0]
+        else {
+            panic!("expected SharesQuality, got {props:?}");
+        };
+        assert_eq!(*relation, SharedQualityRelation::DoesNotShare);
+        let reference = reference.as_ref().expect("reference population");
+        let TargetFilter::Typed(tf) = &**reference else {
+            panic!("expected Typed reference, got {reference:?}");
+        };
+        assert!(
+            tf.type_filters.is_empty(),
+            "\"token\" is a property, not a type, got {:?}",
+            tf.type_filters
+        );
+        assert_eq!(tf.controller, Some(ControllerRef::You));
+        assert!(
+            tf.properties.contains(&FilterProp::Token),
+            "reference must be tokens, got {:?}",
+            tf.properties
+        );
+        assert!(
+            tf.properties
+                .iter()
+                .any(|p| matches!(p, FilterProp::InZone { zone } if *zone == Zone::Battlefield)),
+            "the reference population is battlefield-only (CR 109.2), got {:?}",
+            tf.properties
+        );
+    }
+
+    /// CR 201.2a: the AFFIRMATIVE frame is a different printed grammar and must
+    /// NOT be captured by the filter-position name arm. A filter-position
+    /// `Shares` prop is self-satisfied by the compared object (the candidate is
+    /// one of the objects the reference population would scan), so accepting it
+    /// would turn "that has the same name as …" into a constraint that can never
+    /// fail. The paired positive below proves the same entry point accepts the
+    /// negated forms, so the negative is not a vacuous "nothing parses" claim.
+    #[test]
+    fn parse_that_clause_suffix_refuses_affirmative_name_clause() {
+        let ctx = ParseContext::default();
+        for clause in [
+            " that has the same name as a permanent you control",
+            " that have the same name as a permanent you control",
+        ] {
+            assert!(
+                parse_that_clause_suffix(clause, Some(&ctx)).is_none(),
+                "the affirmative frame is out of class, got {:?} for {clause}",
+                parse_that_clause_suffix(clause, Some(&ctx))
+            );
+        }
+        for clause in [
+            " that doesn't have the same name as another permanent you control",
+            " that doesn't have the same name as a token you control",
+        ] {
+            assert!(
+                parse_that_clause_suffix(clause, Some(&ctx)).is_some(),
+                "the negated form must still parse: {clause}"
+            );
+        }
+    }
+
+    /// CR 201.2a: the negated name clause survives the whole target phrase and
+    /// consumes the entire clause (Yenna's printed target).
+    #[test]
+    fn parse_target_negated_name_clause_consumes_whole_phrase() {
+        let (filter, rest) = parse_target(
+            "target enchantment you control that doesn't have the same name as another permanent you control",
+        );
+        assert!(rest.trim().is_empty(), "remainder: '{rest}'");
+        let TargetFilter::Typed(tf) = &filter else {
+            panic!("expected Typed filter, got {filter:?}");
+        };
+        assert!(tf.type_filters.contains(&TypeFilter::Enchantment));
+        assert_eq!(tf.controller, Some(ControllerRef::You));
+        assert!(
+            tf.properties.iter().any(|prop| matches!(
+                prop,
+                FilterProp::SharesQuality {
+                    relation: SharedQualityRelation::DoesNotShare,
+                    ..
+                }
+            )),
+            "expected a negated name comparison, got {:?}",
+            tf.properties
+        );
+    }
+
+    /// CR 109.2 + CR 303.4b + CR 303.4m: "<type> attached to enchanted player" —
+    /// Curse of Misfortunes' reference population. The attachment qualifier is a
+    /// typed `FilterProp`, not part of the name comparison, so any type phrase
+    /// can carry it. The sibling below proves the prop comes from the qualifier
+    /// and not from parsing "Curse".
+    #[test]
+    fn parse_curse_attached_to_enchanted_player_filter() {
+        let (filter, rest) = parse_target("a Curse attached to enchanted player");
+        assert!(rest.trim().is_empty(), "remainder: '{rest}'");
+        let TargetFilter::Typed(tf) = &filter else {
+            panic!("expected Typed filter, got {filter:?}");
+        };
+        assert_eq!(
+            tf.type_filters,
+            vec![TypeFilter::Subtype("Curse".to_string())],
+            "the qualifier must not disturb the type list"
+        );
+        assert!(
+            tf.properties.contains(&FilterProp::AttachedTo {
+                to: AttachmentReferent::Player {
+                    player: ControllerRef::EnchantedPlayer,
+                },
+            }),
+            "expected AttachedTo{{Player{{EnchantedPlayer}}}}, got {:?}",
+            tf.properties
+        );
+
+        let (plain, _) = parse_target("a Curse");
+        let TargetFilter::Typed(plain) = &plain else {
+            panic!("expected Typed filter, got {plain:?}");
+        };
+        assert!(
+            !plain
+                .properties
+                .iter()
+                .any(|prop| matches!(prop, FilterProp::AttachedTo { .. })),
+            "no attachment prop without the qualifier, got {:?}",
+            plain.properties
+        );
+    }
+
+    /// CR 201.2a: the pre-existing `that doesn't share a name with …` grammar
+    /// stays first in the cascade and keeps its own reference parser. The new
+    /// negated arm is additive: it must not change the shared-quality result.
+    #[test]
+    fn parse_that_clause_suffix_keeps_shared_quality_clause_first() {
+        let ctx = ParseContext::default();
+        let clause = " that doesn't share a name with any other creature you control";
+        let (props, consumed) =
+            parse_that_clause_suffix(clause, Some(&ctx)).expect("shared-quality clause must parse");
+        assert_eq!(consumed, clause.len(), "the whole clause must be consumed");
+        assert!(
+            props.iter().any(|prop| matches!(
+                prop,
+                FilterProp::SharesQuality {
+                    quality: SharedQuality::Name,
+                    relation: SharedQualityRelation::DoesNotShare,
+                    ..
+                }
+            )),
+            "expected the shared-quality result, got {props:?}"
+        );
     }
 
     /// CR 707.2 + CR 115.10a: Duplication Device — "target creature becomes a

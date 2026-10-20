@@ -2784,7 +2784,9 @@ pub(super) fn parse_search_destination(lower: &str) -> Zone {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ability::{Comparator, QuantityRef, SharedQuality, SharedQualityRelation};
+    use crate::types::ability::{
+        AttachmentReferent, Comparator, QuantityRef, SharedQuality, SharedQualityRelation,
+    };
     use crate::types::keywords::{Keyword, KeywordKind};
     use crate::types::mana::{ManaColor, ManaCost};
 
@@ -4288,6 +4290,54 @@ mod tests {
                         scope: ObjectScope::CostPaidObject
                     }
                 }
+            )
+        )));
+    }
+
+    #[test]
+    fn parse_search_filter_curse_card_name_reference_with_enchanted_player() {
+        // CR 201.2a + CR 201.2c + CR 303.4b + CR 303.4m: Curse of Misfortunes'
+        // search filter — "a Curse card that doesn't have the same name as a
+        // Curse attached to enchanted player". The negated name relation is
+        // consumed by the shared name authority through the type phrase; the
+        // reference population is the Curses attached to the enchanted player
+        // on the battlefield (CR 109.2's zone default).
+        let filter = parse_search_filter(
+            "curse card that doesn't have the same name as a curse attached to enchanted player",
+            &mut ParseContext::default(),
+        );
+        let TargetFilter::Typed(filter) = filter else {
+            panic!("expected Typed filter, got {filter:?}");
+        };
+        // The subtype description's core type is inferred (CR 205.3h).
+        assert!(
+            filter.type_filters.contains(&TypeFilter::Enchantment),
+            "expected the inferred Enchantment core type, got {:?}",
+            filter.type_filters
+        );
+        assert_eq!(filter.get_subtype(), Some("Curse"));
+        assert!(filter.properties.iter().any(|property| matches!(
+            property,
+            FilterProp::SharesQuality {
+                quality: SharedQuality::Name,
+                reference: Some(reference),
+                relation: SharedQualityRelation::DoesNotShare,
+            } if matches!(
+                reference.as_ref(),
+                TargetFilter::Typed(TypedFilter {
+                    type_filters,
+                    properties,
+                    ..
+                }) if type_filters.iter().any(|type_filter| matches!(type_filter, TypeFilter::Subtype(subtype) if subtype == "Curse"))
+                    && properties.iter().any(|property| matches!(
+                        property,
+                        FilterProp::AttachedTo {
+                            to: AttachmentReferent::Player {
+                                player: ControllerRef::EnchantedPlayer
+                            }
+                        }
+                    ))
+                    && properties.iter().any(|property| matches!(property, FilterProp::InZone { zone } if *zone == Zone::Battlefield))
             )
         )));
     }
