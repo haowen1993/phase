@@ -6189,16 +6189,32 @@ mod arena_tests {
             (2, false),
             "reach guard: the determiner-led leg survives the keyword suffix"
         );
-        // CR 115.1 + CR 701.3a: the attached-set compound class now parses
-        // (the host is the just-announced creature target), so the relation no
-        // longer falls back to a gap. The failure this probe used to pin was
-        // the unmodelled mass-attachment relation itself.
+        // CR 115.1 + CR 701.3a: the attached-set compound class now parses as
+        // a head that announces the creature plus ONE mass destroy whose
+        // population unions the announced host with the Equipment attached to
+        // it — one counted destroy effect, and no gap. The failure this probe
+        // used to pin was the unmodelled mass-attachment relation itself.
+        let attached_set =
+            "Destroy target creature with flying and all Equipment attached to that creature.";
         assert_eq!(
-            destroys(
-                "Destroy target creature with flying and all Equipment attached to that creature."
-            ),
-            (2, false),
+            destroys(attached_set),
+            (1, false),
             "the attached-set relation is claimed, not a gap"
         );
+        let debug = format!(
+            "{:?}",
+            crate::parser::parse_oracle_text(
+                attached_set,
+                "Leg Probe",
+                &[],
+                &["Sorcery".to_string()],
+                &[],
+            )
+            .abilities
+        );
+        // allow-noncombinator: assertion on a Debug rendering, not parsing dispatch
+        assert!(debug.contains("AttachedTo"), "{debug}");
+        // allow-noncombinator: assertion on a Debug rendering, not parsing dispatch
+        assert!(debug.contains("Host"), "{debug}");
     }
 }
