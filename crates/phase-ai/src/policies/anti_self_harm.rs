@@ -400,13 +400,11 @@ fn score_pre_cast(ctx: &PolicyContext<'_>) -> f64 {
     // For harmful spells, only penalise when targeting is creature-exclusive.
     // Burn spells with TargetFilter::Any can still go face — don't block those.
     let mut has_harmful_creature_only_target = effects.iter().any(|effect| {
-        bounce_announced_target(effect, &effects).is_none()
+        !matches!(effect, Effect::Bounce { .. })
             && matches!(effect_polarity(effect), EffectPolarity::Harmful)
             && targets_creatures_only(effect)
     });
-    let has_harmful_bounce = effects
-        .iter()
-        .any(|effect| is_hostile_or_neutral_bounce(effect, &effects));
+    let has_harmful_bounce = effects.iter().any(is_hostile_or_neutral_bounce);
 
     // Auras have no active effects — detect polarity via static definitions.
     if effects.is_empty() {
@@ -460,7 +458,7 @@ fn score_pre_cast(ctx: &PolicyContext<'_>) -> f64 {
         effects
             .iter()
             .filter(|effect| {
-                bounce_announced_target(effect, &effects).is_none()
+                !matches!(effect, Effect::Bounce { .. })
                     && matches!(effect_polarity(effect), EffectPolarity::Harmful)
                     && targets_creatures_only(effect)
             })
@@ -674,8 +672,11 @@ fn has_opponent_bounce_target(ctx: &PolicyContext<'_>, effects: &[&Effect]) -> b
 
     effects
         .iter()
-        .filter(|effect| is_hostile_or_neutral_bounce(effect, effects))
-        .filter_map(|effect| bounce_announced_target(effect, effects))
+        .filter(|effect| is_hostile_or_neutral_bounce(effect))
+        .filter_map(|effect| match effect {
+            Effect::Bounce { target, .. } => Some(target),
+            _ => None,
+        })
         // CR 702.11/702.16/702.18: defer targeting legality to the engine.
         // `matches_target_filter` is a property filter only and would not
         // reject Shroud/Hexproof/Protection targets, letting a bounce that can
@@ -733,61 +734,15 @@ fn is_useful_removal_target(ctx: &PolicyContext<'_>, id: ObjectId, effects: &[&E
     lethal_to_creature(ctx.state, id, effects) != Some(false)
 }
 
-/// The target named by a bounce instruction. The attached-set family lowers as
-/// a `TargetOnly` head that announces the host plus a `BounceAll` child moving
-/// the host and its attachments together (CR 608.2c), so the head carries the
-/// announced target for both shapes.
-fn bounce_announced_target<'a>(
-    effect: &'a Effect,
-    effects: &[&Effect],
-) -> Option<&'a TargetFilter> {
-    match effect {
-        Effect::Bounce { target, .. } => Some(target),
-        // The attached-set family announces the host in a `TargetOnly` head and
-        // moves it with a `BounceAll` whose population reads that announced
-        // target. Both halves must agree: a chain that merely contains a
-        // `BounceAll` somewhere (Split the Party's per-player mass bounce) is
-        // not this shape, and a player-typed head announces no object at all.
-        Effect::TargetOnly { target }
-            if filter_is_object_population(target)
-                && effects.iter().any(|peer| match peer {
-                    Effect::BounceAll { target, .. } => filter_reads_announced_target(target),
-                    _ => false,
-                }) =>
-        {
-            Some(target)
-        }
-        _ => None,
-    }
-}
-
-/// Whether a filter reads the chain's announced target (the head's `TargetOnly`
-/// slot), directly or through the attached-set host relation.
-fn filter_reads_announced_target(filter: &TargetFilter) -> bool {
-    match filter {
-        TargetFilter::ParentTarget | TargetFilter::ParentTargetSlot { .. } => true,
-        TargetFilter::Not { filter } => filter_reads_announced_target(filter),
-        TargetFilter::Or { filters } | TargetFilter::And { filters } => {
-            filters.iter().any(filter_reads_announced_target)
-        }
-        TargetFilter::Typed(typed) => typed.properties.iter().any(|prop| match prop {
-            engine::types::ability::FilterProp::AttachedTo {
-                to: engine::types::ability::AttachmentReferent::Host { filter },
-            } => filter_reads_announced_target(filter),
-            _ => false,
-        }),
-        _ => false,
-    }
-}
-
-fn is_hostile_or_neutral_bounce(effect: &&Effect, effects: &[&Effect]) -> bool {
-    let Some(target) = bounce_announced_target(effect, effects) else {
+fn is_hostile_or_neutral_bounce(effect: &&Effect) -> bool {
+    let Effect::Bounce { .. } = effect else {
         return false;
     };
-    // The shared self-scope authority also understands the `Owned { You }`
-    // encoding (Scarab of the Unseen, The Eagles Are Coming!), which a bare
-    // `Typed.controller` check misses.
-    !crate::policies::self_protection_classify::target_filter_self_scoped(target)
+    !matches!(
+        extract_target_filter(effect),
+        Some(TargetFilter::Typed(typed))
+            if matches!(typed.controller, Some(engine::types::ability::ControllerRef::You))
+    )
 }
 
 /// Polarity of the pending spell/ability *for whoever fills one target slot*,
@@ -849,14 +804,14 @@ fn slot_is_beneficial(
 /// merely follows the target wherever it lands (Beast Within's "its controller
 /// creates a 3/3", which gifts the token to whoever controlled the destroyed
 /// permanent) can never buy an exemption.
-fn is_deliberate_self_target_rider(effect: &&Effect, effects: &[&Effect]) -> bool {
+fn is_deliberate_self_target_rider(effect: &&Effect) -> bool {
     // A bounce whose filter can legally reach anyone is a value play on one's
     // own permanent (re-buy an ETB, rescue it in response to removal).
     // `score_pre_cast` excludes `Effect::Bounce` from its harmful-target class
     // for exactly this reason. The `controller: You` half needs no arm: such a
     // slot never offers an opponent-controlled object, so the veto below cannot
     // fire on it anyway.
-    if is_hostile_or_neutral_bounce(effect, effects) {
+    if is_hostile_or_neutral_bounce(effect) {
         return true;
     }
     // Flicker exiles the target and returns it as a new object, so
@@ -907,11 +862,7 @@ fn own_permanent_with_opponent_alternative(
         return None;
     }
 
-    if ctx
-        .effects()
-        .iter()
-        .any(|effect| is_deliberate_self_target_rider(effect, &ctx.effects()))
-    {
+    if ctx.effects().iter().any(is_deliberate_self_target_rider) {
         return None;
     }
 
@@ -979,10 +930,7 @@ fn harmful_activation_reaches_only_own_board(ctx: &PolicyContext<'_>) -> Option<
     let effects = ctx.effects();
 
     // Own bounce / flicker: aiming these at one's own permanent IS the play.
-    if effects
-        .iter()
-        .any(|effect| is_deliberate_self_target_rider(effect, &effects))
-    {
+    if effects.iter().any(is_deliberate_self_target_rider) {
         return None;
     }
 
@@ -1178,10 +1126,7 @@ fn score_selected_modes(ctx: &PolicyContext<'_>) -> f64 {
     }
 
     let effects = ctx.effects();
-    if effects
-        .iter()
-        .any(|effect| is_deliberate_self_target_rider(effect, &effects))
-    {
+    if effects.iter().any(is_deliberate_self_target_rider) {
         return 0.0;
     }
     if slot_polarity(ctx, None) != EffectPolarity::Harmful {
@@ -1196,11 +1141,7 @@ fn score_selected_modes(ctx: &PolicyContext<'_>) -> f64 {
     let only_own_board = effects
         .iter()
         .filter(|effect| matches!(effect_polarity(effect), EffectPolarity::Harmful))
-        // The attached-set bounce announces its target on the `TargetOnly` head
-        // rather than on the mass child, so read the announced filter too.
-        .filter_map(|effect| {
-            bounce_announced_target(effect, &effects).or_else(|| extract_target_filter(effect))
-        })
+        .filter_map(|effect| extract_target_filter(effect))
         .filter(|filter| filter_is_object_population(filter))
         .filter(|filter| filter_can_reach_an_opponent(filter))
         .any(|filter| filter_reaches_only_own_permanents(ctx, filter, &filter_ctx));
@@ -8794,10 +8735,16 @@ mod tests {
     /// A `controller: You` filter can never match an opponent's permanent, so
     /// "no opponent matched" is vacuously true and the mode would be penalised
     /// unconditionally. Orzhov Charm's self-bounce mode IS aimed at our own
-    /// board by design (re-buy an ETB, dodge removal). The attached-set shape
-    /// announces the filter on its `TargetOnly` head, which
-    /// `bounce_announced_target` threads into the selected-mode scan; the
-    /// companion `attached_set_bounce_rows_*` unit rows pin that thread.
+    /// board by design (re-buy an ETB, dodge removal).
+    ///
+    /// The attached-set parse shape means this row now covers the shape (the
+    /// head announces the self-scoped filter) rather than the
+    /// `filter_can_reach_an_opponent` guard: `TargetOnly` is Contextual for the
+    /// mode scan, so the guard's pre-existing `Effect::Bounce` coverage is
+    /// pinned by `pre_cast_allows_explicit_self_bounce_patterns`. Teaching the
+    /// policy the attached-set shape is a follow-up, deliberately not part of
+    /// this PR after the review found that recognizing it here regressed
+    /// self-bounce activations.
     #[test]
     fn self_scoped_harmful_mode_is_not_penalised() {
         let mut state = make_state();
@@ -8808,7 +8755,7 @@ mod tests {
         assert_eq!(modes.len(), 3, "three printed modes: {modes:?}");
         // The attached-set bounce family lowers as a `TargetOnly` head (the
         // announced creature) plus a mass child returning the host and its
-        // attachments together; the head still carries the self-scoped filter
+        // attachments together. The head still carries the self-scoped filter
         // this fixture is about.
         let Effect::TargetOnly { target } = &*modes[0].effect else {
             panic!(
@@ -9127,75 +9074,5 @@ mod tests {
             let score = pre_cast_score_for_spell(&state, id);
             assert!(score <= -8.0, "expected the ETB whiff, got {score}");
         }
-    }
-
-    /// R1: the attached-set bounce shape requires BOTH halves — an object head
-    /// and a mass child that reads the announced target. A player head or a
-    /// mass child naming its own filter is not this shape, so Split the Party's
-    /// per-player mass bounce is not misread as a hostile bounce.
-    #[test]
-    fn attached_set_bounce_requires_the_mass_child_to_read_the_announced_target() {
-        let head = Effect::TargetOnly {
-            target: TargetFilter::Typed(engine::types::ability::TypedFilter::creature()),
-        };
-        let consuming = Effect::BounceAll {
-            target: TargetFilter::ParentTarget,
-            destination: None,
-            count: None,
-        };
-        let unrelated = Effect::BounceAll {
-            target: TargetFilter::Typed(engine::types::ability::TypedFilter::creature()),
-            destination: None,
-            count: None,
-        };
-        let player_head = Effect::TargetOnly {
-            target: TargetFilter::Player,
-        };
-
-        assert!(
-            bounce_announced_target(&head, &[&head, &consuming]).is_some(),
-            "the announcing head paired with a mass child that reads it is the class shape"
-        );
-        assert!(
-            bounce_announced_target(&head, &[&head, &unrelated]).is_none(),
-            "a co-occurring mass bounce that names its own filter is not the class shape"
-        );
-        assert!(
-            bounce_announced_target(&player_head, &[&player_head, &consuming]).is_none(),
-            "a player-typed head announces no object host"
-        );
-    }
-
-    /// R2: self-scope is not only `Typed.controller = You`; "you own" is the
-    /// second encoding (Scarab of the Unseen, The Eagles Are Coming!), and the
-    /// shared authority recognises it, so those heads stay non-hostile.
-    #[test]
-    fn attached_set_bounce_self_scope_includes_owned_you() {
-        let mut owned = engine::types::ability::TypedFilter::creature();
-        owned
-            .properties
-            .push(engine::types::ability::FilterProp::Owned {
-                controller: engine::types::ability::ControllerRef::You,
-            });
-        let owned_head = Effect::TargetOnly {
-            target: TargetFilter::Typed(owned),
-        };
-        let child = Effect::BounceAll {
-            target: TargetFilter::ParentTarget,
-            destination: None,
-            count: None,
-        };
-        assert!(
-            !is_hostile_or_neutral_bounce(&&owned_head, &[&owned_head, &child]),
-            "a 'you own' head can only name our own permanents"
-        );
-
-        let hostile_head = Effect::TargetOnly {
-            target: TargetFilter::Typed(engine::types::ability::TypedFilter::creature()),
-        };
-        assert!(
-            is_hostile_or_neutral_bounce(&&hostile_head, &[&hostile_head, &child]),
-            "an unqualified creature head is a hostile bounce"
-        );
     }
 }

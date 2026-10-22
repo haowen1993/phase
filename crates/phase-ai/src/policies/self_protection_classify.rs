@@ -216,20 +216,7 @@ fn keyword_is_defensive(keyword: &Keyword) -> bool {
 pub(crate) fn target_filter_self_scoped(filter: &TargetFilter) -> bool {
     match filter {
         TargetFilter::Controller | TargetFilter::SelfRef => true,
-        // "you own" is the second spelling of self-scope: the filter names only
-        // permanents this player owns, so no opponent-controlled object is ever
-        // a member (Scarab of the Unseen, The Eagles Are Coming!).
-        TargetFilter::Typed(tf) => {
-            matches!(tf.controller, Some(ControllerRef::You))
-                || tf.properties.iter().any(|prop| {
-                    matches!(
-                        prop,
-                        engine::types::ability::FilterProp::Owned {
-                            controller: ControllerRef::You
-                        }
-                    )
-                })
-        }
+        TargetFilter::Typed(tf) => matches!(tf.controller, Some(ControllerRef::You)),
         _ => false,
     }
 }
