@@ -12729,7 +12729,8 @@ fn parse_context_set_referent<'a>(
         TargetFilter::ParentTargetSlot { .. } => None,
         // RF2 gate: an UNBOUND anaphor needs a trigger body; a pronoun the
         // parser already bound (`ctx.object_pronoun_ref`) is an established
-        // antecedent and is admitted ungated.
+        // antecedent and is admitted without the trigger gate (the modal and
+        // ambiguity gates above still apply).
         TargetFilter::ParentTarget => {
             // CR 700.2: a modal mode's declared numbering is mode-local, so an
             // anaphor that only the shared target parse could bind keeps its
@@ -12743,7 +12744,8 @@ fn parse_context_set_referent<'a>(
             // slots the nearest-declarer rule is ambiguous ("Tap target
             // creature. ~ deals 1 damage to target creature. Destroy all
             // Equipment attached to that creature."), and `ParentTarget` would
-            // bind the FIRST selected target instead. Fail closed.
+            // instead read the resolving node's inherited target(s) — not the
+            // nearest declarer. Fail closed.
             let ambiguous_chain = match &ctx.chain_declared_slots {
                 super::DeclaredSlotRegistry::Known(entries) => {
                     entries.iter().filter(|entry| entry.index.is_some()).count() > 1

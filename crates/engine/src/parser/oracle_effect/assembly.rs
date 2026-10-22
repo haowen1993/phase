@@ -6218,6 +6218,14 @@ mod arena_tests {
         let Some(Effect::DestroyAll { target, .. }) = chain.get(1) else {
             panic!("one mass destroy follows the head: {chain:?}");
         };
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|effect| matches!(effect, Effect::DestroyAll { .. }))
+                .count(),
+            1,
+            "exactly one mass destroy in the chain: {chain:?}"
+        );
         let TargetFilter::Or { filters } = target else {
             panic!("the population unions host and attachments: {target:?}");
         };
@@ -6235,8 +6243,8 @@ mod arena_tests {
                         if tf.properties.iter().any(|prop| matches!(
                             prop,
                             FilterProp::AttachedTo {
-                                to: AttachmentReferent::Host { .. }
-                            }
+                                to: AttachmentReferent::Host { filter }
+                            } if matches!(**filter, TargetFilter::ParentTarget)
                         ))
                 )
             }),
