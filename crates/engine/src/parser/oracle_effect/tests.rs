@@ -58764,7 +58764,7 @@ fn attach_host_timing_stonehewer_giant_is_resolution() {
 ///
 /// The gain-control clause itself is now modelled: its "that were attached to
 /// it" relation binds the bounced creature's numbered declared slot (CR 601.2c
-/// + CR 608.2c), so it lowers to `GainControlAll{…AttachedTo{DeclaredTarget{0}}}`
+/// and CR 608.2c), so it lowers to `GainControlAll{…AttachedTo{DeclaredTarget{0}}}`
 /// — never `Host`, and never the fail-closed `attached_to_qualifier` gap.
 ///
 /// Reach-guards: the bounce in front of it still parses, the gain-control clause
@@ -84635,7 +84635,6 @@ fn bidirectional_prevent_binds_the_by_half_to_the_chosen_object() {
 ///
 /// CR 115.1a + CR 115.1d + CR 115.10a + CR 701.3a + CR 608.2c: helpers shared by
 /// the P rows below.
-
 fn attached_set_type_list(core: &str) -> Vec<String> {
     vec![core.to_string()]
 }
@@ -85276,9 +85275,11 @@ fn p11_unconsumed_control_qualifier_fails_closed() {
 /// P12 (F11): a declined clause leaves the parse context untouched.
 #[test]
 fn p12_declined_clause_rolls_back_the_parse_context() {
-    let mut ctx = ParseContext::default();
-    ctx.subject = Some(TargetFilter::SelfRef);
-    ctx.in_trigger = false;
+    let mut ctx = ParseContext {
+        subject: Some(TargetFilter::SelfRef),
+        in_trigger: false,
+        ..Default::default()
+    };
     let before = ctx.clone();
     assert!(
         super::imperative::parse_attached_set_clause(
@@ -85291,9 +85292,11 @@ fn p12_declined_clause_rolls_back_the_parse_context() {
     assert_eq!(ctx, before, "a declined clause must not mutate ctx");
 
     // Paired positive: the trigger-context twin parses and merges.
-    let mut ctx = ParseContext::default();
-    ctx.subject = Some(TargetFilter::Typed(TypedFilter::creature()));
-    ctx.in_trigger = true;
+    let mut ctx = ParseContext {
+        subject: Some(TargetFilter::Typed(TypedFilter::creature())),
+        in_trigger: true,
+        ..Default::default()
+    };
     assert!(
         super::imperative::parse_attached_set_clause(
             "destroy all Auras attached to that creature",
@@ -85384,8 +85387,10 @@ fn p19_rf2_gate_admits_only_bound_or_trigger_referents() {
         "got {target:?}"
     );
 
-    let mut bound = ParseContext::default();
-    bound.object_pronoun_ref = Some(TargetFilter::ParentTarget);
+    let mut bound = ParseContext {
+        object_pronoun_ref: Some(TargetFilter::ParentTarget),
+        ..Default::default()
+    };
     assert!(
         super::imperative::parse_attached_set_clause(
             "destroy all Auras attached to it",
@@ -85395,9 +85400,11 @@ fn p19_rf2_gate_admits_only_bound_or_trigger_referents() {
         "a parser-bound pronoun is admitted ungated"
     );
 
-    let mut demonstrative = ParseContext::default();
-    demonstrative.in_trigger = true;
-    demonstrative.subject = Some(TargetFilter::Typed(TypedFilter::creature()));
+    let mut demonstrative = ParseContext {
+        in_trigger: true,
+        subject: Some(TargetFilter::Typed(TypedFilter::creature())),
+        ..Default::default()
+    };
     let clause = super::imperative::parse_attached_set_clause(
         "destroy all Auras attached to that creature",
         &mut demonstrative,
@@ -85420,9 +85427,12 @@ fn p20_pronoun_entry_point_is_separate_from_the_shared_resolver() {
         index: Some(0),
         filter: TargetFilter::Typed(TypedFilter::creature()),
     }];
-    let mut ctx = ParseContext::default();
-    ctx.chain_declared_slots =
-        crate::parser::oracle_ir::context::DeclaredSlotRegistry::Known(entries);
+    let ctx = ParseContext {
+        chain_declared_slots: crate::parser::oracle_ir::context::DeclaredSlotRegistry::Known(
+            entries,
+        ),
+        ..Default::default()
+    };
     assert_eq!(
         super::resolve_pronoun_declared_slot_anaphor("them", &ctx),
         Some((0, "")),
@@ -85478,16 +85488,20 @@ fn p21_demonstrative_target_keeps_the_counter_gate() {
         (Some(TargetFilter::AttachedTo), true),
         (Some(typed.clone()), true),
     ] {
-        let mut ctx = ParseContext::default();
-        ctx.subject = subject.clone();
+        let ctx = ParseContext {
+            subject: subject.clone(),
+            ..Default::default()
+        };
         assert_eq!(
             resolve_demonstrative_target("that creature.", &ctx),
             expected.then_some("."),
             "subject {subject:?}"
         );
     }
-    let mut ctx = ParseContext::default();
-    ctx.subject = Some(typed);
+    let ctx = ParseContext {
+        subject: Some(typed),
+        ..Default::default()
+    };
     assert_eq!(
         resolve_demonstrative_target("that permanent.", &ctx),
         None,
@@ -85523,9 +85537,11 @@ fn p22_announced_host_outside_the_announced_site_declines() {
             "{text}: paired positive, must parse"
         );
     }
-    let mut ctx = ParseContext::default();
-    ctx.in_trigger = true;
-    ctx.subject = Some(TargetFilter::Typed(TypedFilter::creature()));
+    let mut ctx = ParseContext {
+        in_trigger: true,
+        subject: Some(TargetFilter::Typed(TypedFilter::creature())),
+        ..Default::default()
+    };
     assert!(
         super::imperative::parse_attached_set_clause(
             "Attach all Equipment attached to that creature to ~",

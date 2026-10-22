@@ -400,11 +400,13 @@ fn score_pre_cast(ctx: &PolicyContext<'_>) -> f64 {
     // For harmful spells, only penalise when targeting is creature-exclusive.
     // Burn spells with TargetFilter::Any can still go face — don't block those.
     let mut has_harmful_creature_only_target = effects.iter().any(|effect| {
-        !matches!(effect, Effect::Bounce { .. })
+        bounce_announced_target(effect, &effects).is_none()
             && matches!(effect_polarity(effect), EffectPolarity::Harmful)
             && targets_creatures_only(effect)
     });
-    let has_harmful_bounce = effects.iter().any(is_hostile_or_neutral_bounce);
+    let has_harmful_bounce = effects
+        .iter()
+        .any(|effect| is_hostile_or_neutral_bounce(effect, &effects));
 
     // Auras have no active effects — detect polarity via static definitions.
     if effects.is_empty() {
@@ -458,7 +460,7 @@ fn score_pre_cast(ctx: &PolicyContext<'_>) -> f64 {
         effects
             .iter()
             .filter(|effect| {
-                !matches!(effect, Effect::Bounce { .. })
+                bounce_announced_target(effect, &effects).is_none()
                     && matches!(effect_polarity(effect), EffectPolarity::Harmful)
                     && targets_creatures_only(effect)
             })
@@ -672,11 +674,8 @@ fn has_opponent_bounce_target(ctx: &PolicyContext<'_>, effects: &[&Effect]) -> b
 
     effects
         .iter()
-        .filter(|effect| is_hostile_or_neutral_bounce(effect))
-        .filter_map(|effect| match effect {
-            Effect::Bounce { target, .. } => Some(target),
-            _ => None,
-        })
+        .filter(|effect| is_hostile_or_neutral_bounce(effect, effects))
+        .filter_map(|effect| bounce_announced_target(effect, effects))
         // CR 702.11/702.16/702.18: defer targeting legality to the engine.
         // `matches_target_filter` is a property filter only and would not
         // reject Shroud/Hexproof/Protection targets, letting a bounce that can
@@ -734,13 +733,34 @@ fn is_useful_removal_target(ctx: &PolicyContext<'_>, id: ObjectId, effects: &[&E
     lethal_to_creature(ctx.state, id, effects) != Some(false)
 }
 
-fn is_hostile_or_neutral_bounce(effect: &&Effect) -> bool {
-    let Effect::Bounce { .. } = effect else {
+/// The target named by a bounce instruction. The attached-set family lowers as
+/// a `TargetOnly` head that announces the host plus a `BounceAll` child moving
+/// the host and its attachments together (CR 608.2c), so the head carries the
+/// announced target for both shapes.
+fn bounce_announced_target<'a>(
+    effect: &'a Effect,
+    effects: &[&Effect],
+) -> Option<&'a TargetFilter> {
+    match effect {
+        Effect::Bounce { target, .. } => Some(target),
+        Effect::TargetOnly { target }
+            if effects
+                .iter()
+                .any(|peer| matches!(peer, Effect::BounceAll { .. })) =>
+        {
+            Some(target)
+        }
+        _ => None,
+    }
+}
+
+fn is_hostile_or_neutral_bounce(effect: &&Effect, effects: &[&Effect]) -> bool {
+    let Some(target) = bounce_announced_target(effect, effects) else {
         return false;
     };
     !matches!(
-        extract_target_filter(effect),
-        Some(TargetFilter::Typed(typed))
+        target,
+        TargetFilter::Typed(typed)
             if matches!(typed.controller, Some(engine::types::ability::ControllerRef::You))
     )
 }
@@ -804,14 +824,14 @@ fn slot_is_beneficial(
 /// merely follows the target wherever it lands (Beast Within's "its controller
 /// creates a 3/3", which gifts the token to whoever controlled the destroyed
 /// permanent) can never buy an exemption.
-fn is_deliberate_self_target_rider(effect: &&Effect) -> bool {
+fn is_deliberate_self_target_rider(effect: &&Effect, effects: &[&Effect]) -> bool {
     // A bounce whose filter can legally reach anyone is a value play on one's
     // own permanent (re-buy an ETB, rescue it in response to removal).
     // `score_pre_cast` excludes `Effect::Bounce` from its harmful-target class
     // for exactly this reason. The `controller: You` half needs no arm: such a
     // slot never offers an opponent-controlled object, so the veto below cannot
     // fire on it anyway.
-    if is_hostile_or_neutral_bounce(effect) {
+    if is_hostile_or_neutral_bounce(effect, effects) {
         return true;
     }
     // Flicker exiles the target and returns it as a new object, so
@@ -862,7 +882,11 @@ fn own_permanent_with_opponent_alternative(
         return None;
     }
 
-    if ctx.effects().iter().any(is_deliberate_self_target_rider) {
+    if ctx
+        .effects()
+        .iter()
+        .any(|effect| is_deliberate_self_target_rider(effect, &ctx.effects()))
+    {
         return None;
     }
 
@@ -930,7 +954,10 @@ fn harmful_activation_reaches_only_own_board(ctx: &PolicyContext<'_>) -> Option<
     let effects = ctx.effects();
 
     // Own bounce / flicker: aiming these at one's own permanent IS the play.
-    if effects.iter().any(is_deliberate_self_target_rider) {
+    if effects
+        .iter()
+        .any(|effect| is_deliberate_self_target_rider(effect, &effects))
+    {
         return None;
     }
 
@@ -1126,7 +1153,10 @@ fn score_selected_modes(ctx: &PolicyContext<'_>) -> f64 {
     }
 
     let effects = ctx.effects();
-    if effects.iter().any(is_deliberate_self_target_rider) {
+    if effects
+        .iter()
+        .any(|effect| is_deliberate_self_target_rider(effect, &effects))
+    {
         return 0.0;
     }
     if slot_polarity(ctx, None) != EffectPolarity::Harmful {
@@ -8746,8 +8776,15 @@ mod tests {
 
         let modes = parsed_abilities("Orzhov Charm", ORZHOV_CHARM_ORACLE, &[], &["Instant"]);
         assert_eq!(modes.len(), 3, "three printed modes: {modes:?}");
-        let Effect::Bounce { target, .. } = &*modes[0].effect else {
-            panic!("mode 1 must still parse as a Bounce: {:?}", modes[0].effect);
+        // The attached-set bounce family lowers as a `TargetOnly` head (the
+        // announced creature) plus a mass child returning the host and its
+        // attachments together; the head still carries the self-scoped filter
+        // this fixture is about.
+        let Effect::TargetOnly { target } = &*modes[0].effect else {
+            panic!(
+                "mode 1 must still announce its self-scoped target: {:?}",
+                modes[0].effect
+            );
         };
         assert!(
             matches!(
