@@ -743,10 +743,17 @@ fn bounce_announced_target<'a>(
 ) -> Option<&'a TargetFilter> {
     match effect {
         Effect::Bounce { target, .. } => Some(target),
+        // The attached-set family announces the host in a `TargetOnly` head and
+        // moves it with a `BounceAll` whose population reads that announced
+        // target. Both halves must agree: a chain that merely contains a
+        // `BounceAll` somewhere (Split the Party's per-player mass bounce) is
+        // not this shape, and a player-typed head announces no object at all.
         Effect::TargetOnly { target }
-            if effects
-                .iter()
-                .any(|peer| matches!(peer, Effect::BounceAll { .. })) =>
+            if filter_is_object_population(target)
+                && effects.iter().any(|peer| match peer {
+                    Effect::BounceAll { target, .. } => filter_reads_announced_target(target),
+                    _ => false,
+                }) =>
         {
             Some(target)
         }
@@ -754,15 +761,33 @@ fn bounce_announced_target<'a>(
     }
 }
 
+/// Whether a filter reads the chain's announced target (the head's `TargetOnly`
+/// slot), directly or through the attached-set host relation.
+fn filter_reads_announced_target(filter: &TargetFilter) -> bool {
+    match filter {
+        TargetFilter::ParentTarget | TargetFilter::ParentTargetSlot { .. } => true,
+        TargetFilter::Not { filter } => filter_reads_announced_target(filter),
+        TargetFilter::Or { filters } | TargetFilter::And { filters } => {
+            filters.iter().any(filter_reads_announced_target)
+        }
+        TargetFilter::Typed(typed) => typed.properties.iter().any(|prop| match prop {
+            engine::types::ability::FilterProp::AttachedTo {
+                to: engine::types::ability::AttachmentReferent::Host { filter },
+            } => filter_reads_announced_target(filter),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
 fn is_hostile_or_neutral_bounce(effect: &&Effect, effects: &[&Effect]) -> bool {
     let Some(target) = bounce_announced_target(effect, effects) else {
         return false;
     };
-    !matches!(
-        target,
-        TargetFilter::Typed(typed)
-            if matches!(typed.controller, Some(engine::types::ability::ControllerRef::You))
-    )
+    // The shared self-scope authority also understands the `Owned { You }`
+    // encoding (Scarab of the Unseen, The Eagles Are Coming!), which a bare
+    // `Typed.controller` check misses.
+    !crate::policies::self_protection_classify::target_filter_self_scoped(target)
 }
 
 /// Polarity of the pending spell/ability *for whoever fills one target slot*,
@@ -1171,7 +1196,11 @@ fn score_selected_modes(ctx: &PolicyContext<'_>) -> f64 {
     let only_own_board = effects
         .iter()
         .filter(|effect| matches!(effect_polarity(effect), EffectPolarity::Harmful))
-        .filter_map(|effect| extract_target_filter(effect))
+        // The attached-set bounce announces its target on the `TargetOnly` head
+        // rather than on the mass child, so read the announced filter too.
+        .filter_map(|effect| {
+            bounce_announced_target(effect, &effects).or_else(|| extract_target_filter(effect))
+        })
         .filter(|filter| filter_is_object_population(filter))
         .filter(|filter| filter_can_reach_an_opponent(filter))
         .any(|filter| filter_reaches_only_own_permanents(ctx, filter, &filter_ctx));
@@ -8765,9 +8794,10 @@ mod tests {
     /// A `controller: You` filter can never match an opponent's permanent, so
     /// "no opponent matched" is vacuously true and the mode would be penalised
     /// unconditionally. Orzhov Charm's self-bounce mode IS aimed at our own
-    /// board by design (re-buy an ETB, dodge removal). REVERT-FAILING: without
-    /// the `filter_can_reach_an_opponent` guard this scores the wasted-cast
-    /// penalty even with an opposing creature sitting on the battlefield.
+    /// board by design (re-buy an ETB, dodge removal). The attached-set shape
+    /// announces the filter on its `TargetOnly` head, which
+    /// `bounce_announced_target` threads into the selected-mode scan; the
+    /// companion `attached_set_bounce_rows_*` unit rows pin that thread.
     #[test]
     fn self_scoped_harmful_mode_is_not_penalised() {
         let mut state = make_state();
@@ -9097,5 +9127,75 @@ mod tests {
             let score = pre_cast_score_for_spell(&state, id);
             assert!(score <= -8.0, "expected the ETB whiff, got {score}");
         }
+    }
+
+    /// R1: the attached-set bounce shape requires BOTH halves — an object head
+    /// and a mass child that reads the announced target. A player head or a
+    /// mass child naming its own filter is not this shape, so Split the Party's
+    /// per-player mass bounce is not misread as a hostile bounce.
+    #[test]
+    fn attached_set_bounce_requires_the_mass_child_to_read_the_announced_target() {
+        let head = Effect::TargetOnly {
+            target: TargetFilter::Typed(engine::types::ability::TypedFilter::creature()),
+        };
+        let consuming = Effect::BounceAll {
+            target: TargetFilter::ParentTarget,
+            destination: None,
+            count: None,
+        };
+        let unrelated = Effect::BounceAll {
+            target: TargetFilter::Typed(engine::types::ability::TypedFilter::creature()),
+            destination: None,
+            count: None,
+        };
+        let player_head = Effect::TargetOnly {
+            target: TargetFilter::Player,
+        };
+
+        assert!(
+            bounce_announced_target(&head, &[&head, &consuming]).is_some(),
+            "the announcing head paired with a mass child that reads it is the class shape"
+        );
+        assert!(
+            bounce_announced_target(&head, &[&head, &unrelated]).is_none(),
+            "a co-occurring mass bounce that names its own filter is not the class shape"
+        );
+        assert!(
+            bounce_announced_target(&player_head, &[&player_head, &consuming]).is_none(),
+            "a player-typed head announces no object host"
+        );
+    }
+
+    /// R2: self-scope is not only `Typed.controller = You`; "you own" is the
+    /// second encoding (Scarab of the Unseen, The Eagles Are Coming!), and the
+    /// shared authority recognises it, so those heads stay non-hostile.
+    #[test]
+    fn attached_set_bounce_self_scope_includes_owned_you() {
+        let mut owned = engine::types::ability::TypedFilter::creature();
+        owned
+            .properties
+            .push(engine::types::ability::FilterProp::Owned {
+                controller: engine::types::ability::ControllerRef::You,
+            });
+        let owned_head = Effect::TargetOnly {
+            target: TargetFilter::Typed(owned),
+        };
+        let child = Effect::BounceAll {
+            target: TargetFilter::ParentTarget,
+            destination: None,
+            count: None,
+        };
+        assert!(
+            !is_hostile_or_neutral_bounce(&&owned_head, &[&owned_head, &child]),
+            "a 'you own' head can only name our own permanents"
+        );
+
+        let hostile_head = Effect::TargetOnly {
+            target: TargetFilter::Typed(engine::types::ability::TypedFilter::creature()),
+        };
+        assert!(
+            is_hostile_or_neutral_bounce(&&hostile_head, &[&hostile_head, &child]),
+            "an unqualified creature head is a hostile bounce"
+        );
     }
 }
