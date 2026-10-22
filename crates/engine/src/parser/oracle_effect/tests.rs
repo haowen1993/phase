@@ -58280,9 +58280,14 @@ fn attach_host_timing_stonehewer_giant_is_resolution() {
 /// instead of a `ParentTarget` attach bound to the bounced creature, which
 /// CR 400.7 makes a new object.
 ///
-/// Reach-guards: the bounce in front of it still parses, and the chain reaches
-/// the attach clause behind the (attachment-qualified, fail-closed) gain-control
-/// clause, so the refusal is not a whole-line collapse.
+/// The gain-control clause itself is now modelled: its "that were attached to
+/// it" relation binds the bounced creature's numbered declared slot (CR 601.2c
+/// + CR 608.2c), so it lowers to `GainControlAll{…AttachedTo{DeclaredTarget{0}}}`
+/// — never `Host`, and never the fail-closed `attached_to_qualifier` gap.
+///
+/// Reach-guards: the bounce in front of it still parses, the gain-control clause
+/// lowers, and the chain reaches the attach clause behind it, so the refusal is
+/// not a whole-line collapse.
 #[test]
 fn plural_anaphor_attachment_clause_is_unsupported() {
     let def = parse_effect_chain(
@@ -58298,13 +58303,24 @@ fn plural_anaphor_attachment_clause_is_unsupported() {
         .sub_ability
         .as_deref()
         .expect("the gain-control clause must follow the bounce");
-    // CR 301.5 + CR 303.4: "that were attached to it" is an unmodelled
-    // attachment relation, so the gain-control clause fails closed too; the
-    // reach-guard is that the chain still reaches the attach clause behind it.
+    // CR 601.2c + CR 608.2c + CR 701.3a: the attachment relation binds the
+    // bounced creature's unique numbered declared slot, so the gain-control
+    // instruction lowers with a `DeclaredTarget` prop (the D2 family).
+    let Effect::GainControlAll { target } = &*gain.effect else {
+        panic!(
+            "the gain-control clause must lower to GainControlAll with its declared-slot \
+             attachment prop, got {:?}",
+            gain.effect
+        );
+    };
+    assert_eq!(
+        declared_slots_in_filter(target),
+        vec![0],
+        "the pronoun binds the announced slot"
+    );
     assert!(
-        matches!(&*gain.effect, Effect::Unimplemented { name, .. } if name == "attached_to_qualifier"),
-        "the gain-control clause must fail closed on its attachment qualifier, got {:?}",
-        gain.effect
+        !filter_has_host(target, &TargetFilter::ParentTarget),
+        "a bound slot is DeclaredTarget, never Host: {target:?}"
     );
     let attach_clause = gain
         .sub_ability
@@ -83733,7 +83749,10 @@ fn all_typed_legs_carry_host(filter: &TargetFilter, expected: &TargetFilter) -> 
     }
 }
 
-/// The declared slots referenced by `AttachedTo { DeclaredTarget { slot } }`.
+/// The distinct declared slots referenced by
+/// `AttachedTo { DeclaredTarget { slot } }`. Set semantics: "Auras and
+/// Equipment" distributes the prop onto one `Or` leg per type (Fumble), so the
+/// same slot legitimately appears on several legs.
 fn declared_slots_in_filter(filter: &TargetFilter) -> Vec<usize> {
     let mut slots = Vec::new();
     fn walk(filter: &TargetFilter, out: &mut Vec<usize>) {
@@ -83744,7 +83763,9 @@ fn declared_slots_in_filter(filter: &TargetFilter) -> Vec<usize> {
                         to: AttachmentReferent::DeclaredTarget { slot },
                     } = prop
                     {
-                        out.push(*slot);
+                        if !out.contains(slot) {
+                            out.push(*slot);
+                        }
                     }
                 }
             }
@@ -83940,8 +83961,11 @@ fn p3_family_a_trigger_bodies_bind_the_event_or_source_host() {
             !chain_any(body, &|d| matches!(&*d.effect, Effect::TargetOnly { .. })),
             "{name}: must not announce a target the card does not have: {body:#?}"
         );
+        // `chain_nodes` (not `chain_any`) is the walker that descends a
+        // `CreateDelayedTrigger`'s payload, which is where Corrosive Ooze's
+        // "at end of combat" mass destroy lives.
         assert!(
-            chain_any(body, &|d| match &*d.effect {
+            chain_nodes(body).into_iter().any(|d| match &*d.effect {
                 Effect::DestroyAll { target, .. } => {
                     all_typed_legs_carry_host(target, &TargetFilter::ParentTarget)
                 }
@@ -84023,14 +84047,26 @@ fn p4_end_hostilities_lowers_to_or_of_primary_and_host_attached() {
         "attached leg hosts 'creatures', got {filters:?}"
     );
 
-    // Hostile: an announced host referent is not this shape.
+    // Hostile: an announced host referent is not this shape. The modelled
+    // production declines the announced referent (RF3-4), so the pre-existing
+    // compound splitter keeps the second leg as the fail-closed gap and no
+    // `Host` is synthesized. (The splitter's primary `DestroyAll` for "all
+    // creatures" is unrelated to the qualifier, so asserting its absence would
+    // be wrong.)
     let def = parse_effect_chain(
         "Destroy all creatures and all permanents attached to target creature.",
         AbilityKind::Spell,
     );
     assert!(
-        !chain_any(&def, &|d| matches!(&*d.effect, Effect::DestroyAll { .. })),
-        "announced-host variant must not claim the mass clause: {def:#?}"
+        chain_any(&def, &|d| matches!(
+            &*d.effect,
+            Effect::Unimplemented { name, .. } if name == super::imperative::ATTACHED_TO_QUALIFIER_GAP
+        )),
+        "announced-host variant must keep the attachment gap: {def:#?}"
+    );
+    assert!(
+        !serde_json::to_string(&def).unwrap().contains("\"Host\""),
+        "announced-host variant must not synthesize a Host: {def:#?}"
     );
 }
 
@@ -84519,13 +84555,15 @@ fn p21_demonstrative_target_keeps_the_counter_gate() {
 
 /// P22 (RF3-4): a present announced head at a non-`Announced` site, or a
 /// player-typed announced referent, declines the whole clause — never an
-/// untargeted host.
+/// untargeted host. The last negative is the mixed `Or[Typed(Creature),
+/// Player]`: one player leg spoils the whole filter, so no `Host` is built.
 #[test]
 fn p22_announced_host_outside_the_announced_site_declines() {
     for text in [
         "Destroy all Curses attached to target player",
         "Attach all Equipment attached to target creature to ~",
         "Destroy target creature and all Auras attached to target player",
+        "Destroy all Auras attached to target creature or player",
     ] {
         let mut ctx = ParseContext::default();
         assert!(

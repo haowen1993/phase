@@ -17,10 +17,11 @@
 use engine::game::effects::attach;
 use engine::game::game_object::AttachTarget;
 use engine::game::scenario::{GameRunner, GameScenario, P0, P1};
+use engine::types::ability::TargetRef;
 use engine::types::actions::GameAction;
 use engine::types::game_state::WaitingFor;
 use engine::types::identifiers::ObjectId;
-use engine::types::mana::{ManaColor, ManaCost};
+use engine::types::mana::{ManaColor, ManaCost, ManaType, ManaUnit};
 use engine::types::phase::Phase;
 use engine::types::player::PlayerId;
 use engine::types::zones::Zone;
@@ -45,6 +46,9 @@ const END_HOSTILITIES: &str = "Destroy all creatures and all permanents attached
 const TAWNOS_COFFIN: &str = "You may choose not to untap this artifact during your untap step.\n{3}, {T}: Exile target creature and all Auras attached to it. Note the number and kind of counters that were on that creature. When this artifact leaves the battlefield or becomes untapped, return that exiled card to the battlefield under its owner's control tapped with the noted number and kind of counters on it. If you do, return the other exiled cards to the battlefield under their owners' control attached to that permanent.";
 const TREEFOLK_MYSTIC: &str = "Whenever this creature blocks or becomes blocked by a creature, destroy all Auras attached to that creature.";
 const CORROSIVE_OOZE: &str = "Whenever this creature blocks or becomes blocked by an equipped creature, destroy all Equipment attached to that creature at end of combat.";
+const STREET_SWEEPER: &str =
+    "Whenever this creature attacks, destroy all Auras attached to target land.";
+const RHUK: &str = "Trample, haste\nWhenever an equipped creature you control other than Rhuk attacks or dies, you may attach all Equipment attached to that creature to Rhuk.";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -77,6 +81,16 @@ fn free_spell(scenario: &mut GameScenario, name: &str, instant: bool, oracle: &s
 
 fn attach_at(runner: &mut GameRunner, attachment: ObjectId, host: ObjectId) {
     attach::attach_to(runner.state_mut(), attachment, host);
+}
+
+/// CR 500.1 + CR 508.1a: hand the turn to the attacking player. The scenario
+/// builder seats P0 as the active player, so a fixture whose attacker is P1
+/// must move the active player (and its priority window) first or the engine
+/// rejects the declaration as not the active player's.
+fn hand_turn_to(runner: &mut GameRunner, attacker: PlayerId) {
+    runner.state_mut().active_player = attacker;
+    runner.state_mut().priority_player = attacker;
+    runner.state_mut().waiting_for = WaitingFor::Priority { player: attacker };
 }
 
 /// Pass priority until the stack is empty and the engine is at a quiet
@@ -249,7 +263,7 @@ fn r3_word_of_undoing_returns_only_the_casters_white_auras() {
 // R4: Essence Reliquary — "another" excludes the source (F8)
 // ---------------------------------------------------------------------------
 
-/// R4 (CR 115.1 + CR 701.26): the Reliquary's own activation returns another
+/// R4 (CR 115.1): the Reliquary's own activation returns another
 /// target permanent the caster controls and the Auras they control attached to
 /// it; the Reliquary is not a legal target for its own "another".
 #[test]
@@ -302,6 +316,16 @@ fn r5_portal_of_sanctuary_returns_own_creature_and_each_aura() {
         .add_artifact_from_oracle(P0, "Portal of Sanctuary", PORTAL_OF_SANCTUARY)
         .with_mana_cost(ManaCost::generic(0))
         .id();
+    // CR 602.2b: the activation's own {1} cost is paid from the pool.
+    scenario.with_mana_pool(
+        P0,
+        vec![ManaUnit::new(
+            ManaType::Colorless,
+            portal,
+            false,
+            Vec::new(),
+        )],
+    );
     let mut runner = scenario.build();
     attach_at(&mut runner, on_mine, mine);
 
@@ -367,6 +391,16 @@ fn r7_silence_exiles_each_chosen_creature_and_its_auras() {
         "Silence the Believers",
         true,
         SILENCE_THE_BELIEVERS,
+    );
+    // CR 601.2f + CR 601.2h: the strive rider adds {2}{B} for the second
+    // target; the pool must cover it for the cast to be payable.
+    scenario.with_mana_pool(
+        P0,
+        vec![
+            ManaUnit::new(ManaType::Colorless, spell, false, Vec::new()),
+            ManaUnit::new(ManaType::Colorless, spell, false, Vec::new()),
+            ManaUnit::new(ManaType::Black, spell, false, Vec::new()),
+        ],
     );
     let mut runner = scenario.build();
     attach_at(&mut runner, first_aura, first);
@@ -437,6 +471,90 @@ fn r9_eaten_by_spiders_destroys_a_flyer_and_its_equipment() {
 }
 
 // ---------------------------------------------------------------------------
+// R10: Street Sweeper — the triggered announced host (family B)
+// ---------------------------------------------------------------------------
+
+/// R10 (CR 115.1a + CR 701.8a + CR 603.7): the attack trigger announces its
+/// land target at the trigger's target step, and the mass child destroys
+/// exactly the Auras attached to that land; the land itself and an Aura on a
+/// different land survive.
+#[test]
+fn r10_street_sweeper_destroys_auras_attached_to_the_targeted_land() {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::BeginCombat);
+    let sweeper = scenario
+        .add_creature_from_oracle(P0, "Street Sweeper", 4, 6, STREET_SWEEPER)
+        .id();
+    let chosen_land = scenario.add_land_from_oracle(P1, "Chosen Land", "").id();
+    let other_land = scenario.add_land_from_oracle(P1, "Other Land", "").id();
+    let on_chosen = aura(&mut scenario, P1, "Aura on Chosen Land");
+    let on_other = aura(&mut scenario, P1, "Aura on Other Land");
+    let mut runner = scenario.build();
+    attach_at(&mut runner, on_chosen, chosen_land);
+    attach_at(&mut runner, on_other, other_land);
+
+    runner
+        .declare_attackers(&[(sweeper, engine::game::combat::AttackTarget::Player(P1))])
+        .expect("declare the attacker");
+
+    let mut saw_target_prompt = false;
+    for _ in 0..64 {
+        match runner.state().waiting_for.clone() {
+            WaitingFor::TriggerTargetSelection {
+                target_slots,
+                selection,
+                ..
+            } => {
+                let slot = &target_slots[selection.current_slot];
+                assert!(
+                    slot.legal_targets.contains(&TargetRef::Object(chosen_land))
+                        && slot.legal_targets.contains(&TargetRef::Object(other_land)),
+                    "both lands are legal targets: {:?}",
+                    slot.legal_targets
+                );
+                runner
+                    .act(GameAction::ChooseTarget {
+                        target: Some(TargetRef::Object(chosen_land)),
+                    })
+                    .expect("choose the land");
+                saw_target_prompt = true;
+            }
+            WaitingFor::OrderTriggers { triggers, .. } => {
+                let order: Vec<usize> = (0..triggers.len()).collect();
+                let _ = runner.act(GameAction::OrderTriggers { order });
+            }
+            WaitingFor::Priority { .. } if runner.state().stack.is_empty() => break,
+            WaitingFor::Priority { .. } => {
+                runner.act(GameAction::PassPriority).expect("pass priority");
+            }
+            other => panic!("unexpected prompt while resolving Street Sweeper: {other:?}"),
+        }
+    }
+
+    assert!(
+        saw_target_prompt,
+        "reach guard: the attack trigger asked for its land target"
+    );
+    let state = runner.state();
+    assert_eq!(state.objects[&sweeper].zone, Zone::Battlefield);
+    assert_eq!(
+        state.objects[&chosen_land].zone,
+        Zone::Battlefield,
+        "the targeted land itself is not destroyed"
+    );
+    assert_eq!(
+        state.objects[&on_chosen].zone,
+        Zone::Graveyard,
+        "the Aura attached to the targeted land is destroyed"
+    );
+    assert_eq!(
+        state.objects[&on_other].zone,
+        Zone::Battlefield,
+        "an Aura on a different land survives"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // R12: Witchbane Orb — Curses attached to a PLAYER
 // ---------------------------------------------------------------------------
 
@@ -455,7 +573,14 @@ fn r12_witchbane_orb_destroys_curses_attached_to_you() {
         .add_enchantment_from_oracle(P0, "Curse on Them", "Enchant player")
         .with_subtypes(vec!["Aura", "Curse"])
         .id();
-    let orb = free_spell(&mut scenario, "Witchbane Orb", false, WITCHBANE_ORB);
+    // CR 301.1 + CR 603.6a: the Orb is an ARTIFACT permanent spell, so it must
+    // be built as an artifact card — a sorcery-typed stand-in resolves to the
+    // graveyard and never enters, so its ETB trigger would never fire.
+    let orb = scenario
+        .add_artifact_to_hand_from_oracle(P0, "Witchbane Orb", WITCHBANE_ORB)
+        .with_mana_cost(ManaCost::generic(0))
+        .id();
+    scenario.with_mana_pool(P0, vec![]);
     let mut runner = scenario.build();
     {
         let state = runner.state_mut();
@@ -482,6 +607,72 @@ fn r12_witchbane_orb_destroys_curses_attached_to_you() {
         "a Curse attached to the opponent stays"
     );
     assert!(outcome.state().stack.is_empty(), "the ETB trigger resolved");
+}
+
+// ---------------------------------------------------------------------------
+// R13: Rhuk, Hexgold Nabber — family D, the triggered Host{TriggeringSource}
+// ---------------------------------------------------------------------------
+
+/// R13 (CR 508.1a + CR 603.7 + CR 701.3a): the attack trigger's "that creature"
+/// is the triggering attacker (`AttachedTo{Host{TriggeringSource}}`), and the
+/// determined "all Equipment" set moves from that creature to Rhuk; Equipment
+/// on a different creature stays put.
+#[test]
+fn r13_rhuk_attaches_the_triggering_creatures_equipment_to_itself() {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::BeginCombat);
+    let rhuk = scenario
+        .add_creature_from_oracle(P0, "Rhuk, Hexgold Nabber", 2, 2, RHUK)
+        .id();
+    let bearer = scenario.add_creature(P0, "Equipped Bearer", 2, 2).id();
+    let other = scenario.add_creature(P1, "Other Creature", 2, 2).id();
+    let on_bearer = equipment(&mut scenario, P0, "Bearer Equipment");
+    let on_other = equipment(&mut scenario, P1, "Other Equipment");
+    let mut runner = scenario.build();
+    attach_at(&mut runner, on_bearer, bearer);
+    attach_at(&mut runner, on_other, other);
+
+    runner
+        .declare_attackers(&[(bearer, engine::game::combat::AttackTarget::Player(P1))])
+        .expect("declare the equipped attacker");
+
+    let mut optional_prompts = 0;
+    for _ in 0..64 {
+        match runner.state().waiting_for.clone() {
+            // "you may attach" is an optional instruction at resolution.
+            WaitingFor::OptionalEffectChoice { .. } => {
+                optional_prompts += 1;
+                runner
+                    .act(GameAction::DecideOptionalEffect { accept: true })
+                    .expect("accept the attach");
+            }
+            WaitingFor::OrderTriggers { triggers, .. } => {
+                let order: Vec<usize> = (0..triggers.len()).collect();
+                let _ = runner.act(GameAction::OrderTriggers { order });
+            }
+            WaitingFor::Priority { .. } if runner.state().stack.is_empty() => break,
+            WaitingFor::Priority { .. } => {
+                runner.act(GameAction::PassPriority).expect("pass priority");
+            }
+            other => panic!("unexpected prompt while resolving Rhuk: {other:?}"),
+        }
+    }
+
+    assert_eq!(
+        optional_prompts, 1,
+        "reach guard: the attack trigger fired and offered its optional attach"
+    );
+    let state = runner.state();
+    assert_eq!(
+        state.objects[&on_bearer].attached_to,
+        Some(AttachTarget::Object(rhuk)),
+        "the triggering attacker's Equipment moves to Rhuk"
+    );
+    assert_eq!(
+        state.objects[&on_other].attached_to,
+        Some(AttachTarget::Object(other)),
+        "Equipment on a different creature is untouched"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +769,13 @@ fn r18_tawnos_coffin_exiles_creature_and_its_auras() {
         .add_artifact_from_oracle(P0, "Tawnos's Coffin", TAWNOS_COFFIN)
         .with_mana_cost(ManaCost::generic(0))
         .id();
+    // CR 602.2b: the activation's own {3} cost is paid from the pool.
+    scenario.with_mana_pool(
+        P0,
+        (0..3)
+            .map(|_| ManaUnit::new(ManaType::Colorless, coffin, false, Vec::new()))
+            .collect(),
+    );
     let mut runner = scenario.build();
     attach_at(&mut runner, on_victim, victim);
 
@@ -618,6 +816,8 @@ fn r15_treefolk_mystic_destroys_the_blocked_creatures_aura() {
     let on_treefolk = aura(&mut scenario, P1, "Aura on Treefolk");
     let on_unrelated = aura(&mut scenario, P1, "Aura on Unrelated");
     let mut runner = scenario.build();
+    // P1 is the attacking player; the builder seats P0.
+    hand_turn_to(&mut runner, P1);
     for (aura_id, host) in [
         (on_attacker, attacker),
         (on_treefolk, treefolk),
@@ -687,6 +887,8 @@ fn ooze_board() -> OozeBoard {
     let attacker_equipment = equipment(&mut scenario, P1, "Attacker Equipment");
     let other_equipment = equipment(&mut scenario, P1, "Other Equipment");
     let mut runner = scenario.build();
+    // P1 is the attacking player; the builder seats P0.
+    hand_turn_to(&mut runner, P1);
     attach_at(&mut runner, attacker_equipment, attacker);
     attach_at(&mut runner, other_equipment, other);
     runner
@@ -740,7 +942,9 @@ fn r16a_corrosive_ooze_destroys_the_equipment_at_end_of_combat() {
             "the creation snapshot pins its incarnation"
         );
     }
-    b.runner.advance_to_phase(Phase::EndCombat);
+    // CR 510.1-510.3: drive the combat-damage step to end of combat; the
+    // delayed payload fires there.
+    b.runner.combat_damage();
     settle(&mut b.runner);
     let state = b.runner.state();
     assert_eq!(
@@ -774,7 +978,7 @@ fn r16b_corrosive_ooze_destroys_the_equipment_even_if_the_ooze_leaves() {
             &mut events,
         );
     }
-    b.runner.advance_to_phase(Phase::EndCombat);
+    b.runner.combat_damage();
     settle(&mut b.runner);
     assert_eq!(
         b.runner.state().objects[&b.equipment].zone,

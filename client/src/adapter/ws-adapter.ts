@@ -215,6 +215,13 @@ export class NativeEngineVersionMismatchError extends Error {
  * `crates/server-core/src/protocol.rs`. Bump in lockstep when either side
  * adds, removes, renames, or changes the type of a protocol variant field.
  *
+ * 156 — AttachmentReferent (the FilterProp::AttachedTo referent, CR 701.3a +
+ *      CR 303.4) gains Host { filter }, the filter-matched object-host axis for
+ *      "all <filter> attached to <referent>" (CR 608.2c). It serializes inside
+ *      every ability definition carried by GameState — see PROTOCOL_VERSION's
+ *      own `/// 156` entry in crates/lobby-broker/src/protocol.rs. A v155 peer
+ *      cannot parse state that names it; the exact-match version check at
+ *      connect refuses the pairing. Wire 138 moves with it.
  * 155 — PendingChangeZoneIteration members carry their pre-event entry modifications
  *      (ChangeZoneMemberEntry, CR 603.6a + CR 614.12), and the persisted resolution
  *      state moves from version 6 to 7 — see PROTOCOL_VERSION's own `/// 155` entry
@@ -944,7 +951,7 @@ export class NativeEngineVersionMismatchError extends Error {
  *      every spell frame is byte-identical to v78.
  *
  */
-export const PROTOCOL_VERSION = 155;
+export const PROTOCOL_VERSION = 156;
 
 /**
  * Lowest server protocol version this client will accept in the handshake.

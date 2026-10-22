@@ -12621,7 +12621,15 @@ fn parse_attached_set_referent<'a>(
         AttachedSetRefSite::Announced => {
             let (filter, rest) = parse_target_with_ctx(after_relation, ctx);
             let phrase = &after_relation[..after_relation.len() - rest.len()];
-            if !attachment_phrase_admits(phrase) || !is_object_host_filter(&filter) {
+            // CR 303.4b + CR 109.5: a player referent is the player-host axis
+            // (its own `AttachmentReferent::Player` arm), never an object host;
+            // the shared player authority is the gate, so "target player" and
+            // "target creature or player" decline instead of building a `Host`
+            // that could never match an object.
+            if !attachment_phrase_admits(phrase)
+                || super::player_filter_as_controller_ref(&filter).is_some()
+                || !is_object_host_filter(&filter)
+            {
                 return None;
             }
             Some((
@@ -12760,11 +12768,21 @@ fn parse_context_set_referent<'a>(
     }
 }
 
-/// CR 115.1 + CR 701.3a: is this parsed referent phrase a real OBJECT host
-/// filter? `TargetFilter::Any` is the target grammar's fallback for an
-/// unrecognized phrase and an all-empty `Typed` carries no information — either
+/// CR 115.1 + CR 701.3a + CR 303.4b: is this parsed referent phrase a real
+/// OBJECT host filter? `TargetFilter::Any` is the target grammar's fallback for
+/// an unrecognized phrase and an all-empty `Typed` carries no information — either
 /// would widen the clause to "attached to anything", so both fail closed.
+///
+/// The player axis is object-incompatible by construction: `game::filter`'s
+/// `attached_to_host_filter` resolves `Host` against battlefield HOSTS, so a
+/// player filter (`Player`, a controller/owner projection, `PlayerMatching`, …)
+/// can never match there and would make the whole clause inert while coverage
+/// reports it supported. Every player read therefore declines, including a
+/// mixed `Or`/`And` leg (`Or[Typed(Creature), Player]`).
 fn is_object_host_filter(filter: &TargetFilter) -> bool {
+    if super::player_filter_as_controller_ref(filter).is_some() || is_player_axis_filter(filter) {
+        return false;
+    }
     match filter {
         TargetFilter::Any => false,
         TargetFilter::Typed(tf) => {
@@ -12774,6 +12792,50 @@ fn is_object_host_filter(filter: &TargetFilter) -> bool {
             !filters.is_empty() && filters.iter().all(is_object_host_filter)
         }
         _ => true,
+    }
+}
+
+/// CR 303.4b + CR 701.3a + CR 109.5: the player-axis reads of [`TargetFilter`] —
+/// every variant that resolves to a player (or a player-and-permanents set)
+/// rather than to a battlefield object, plus [`TargetFilter::Not`] and the
+/// boolean combinators that can hide one. `Player`-typed `Typed` filters and the
+/// controller references already caught by
+/// `super::player_filter_as_controller_ref` are checked there; this match names
+/// the remaining player projections explicitly so a new player variant cannot be
+/// admitted silently by `is_object_host_filter`'s `_ => true` object fallback.
+fn is_player_axis_filter(filter: &TargetFilter) -> bool {
+    match filter {
+        TargetFilter::Player
+        | TargetFilter::Controller
+        | TargetFilter::SourceController
+        | TargetFilter::ControllerAndControlledPermanents { .. }
+        | TargetFilter::Opponent
+        | TargetFilter::SpecificPlayer { .. }
+        | TargetFilter::PlayerWhoChoseLabel { .. }
+        | TargetFilter::PlayerMatching { .. }
+        | TargetFilter::Neighbor { .. }
+        | TargetFilter::ScopedPlayer
+        | TargetFilter::TriggeringSpellController
+        | TargetFilter::TriggeringSpellOwner
+        | TargetFilter::TriggeringPlayer
+        | TargetFilter::TriggeringSourceController
+        | TargetFilter::EventTargetController
+        | TargetFilter::DeclaredPlayer { .. }
+        | TargetFilter::ParentTargetController
+        | TargetFilter::ParentTargetOwner
+        | TargetFilter::SourceChosenPlayer
+        | TargetFilter::OriginalController
+        | TargetFilter::PostReplacementSourceController
+        | TargetFilter::PostReplacementDamageTarget
+        | TargetFilter::PostReplacementDamageTargetOwner
+        | TargetFilter::DefendingPlayer
+        | TargetFilter::Owner
+        | TargetFilter::AllPlayers => true,
+        TargetFilter::Not { filter } => is_player_axis_filter(filter),
+        TargetFilter::Or { filters } | TargetFilter::And { filters } => {
+            filters.iter().any(is_player_axis_filter)
+        }
+        _ => false,
     }
 }
 
@@ -30136,5 +30198,74 @@ mod loyalty_symbol_effect_tests {
         ] {
             assert!(parse_loyalty_symbol_effect(text).is_none(), "{text:?}");
         }
+    }
+
+    /// F1 (CR 303.4b + CR 109.5): a player leg never makes an object host.
+    /// `Or[Typed(Creature), Player]` — the "creature or player" algebra — fails
+    /// the whole filter, and every player-axis read is rejected. Without this,
+    /// "all Curses attached to target player" builds `Host{Player}`: inert at
+    /// resolution while coverage reports the clause supported.
+    #[test]
+    fn player_axis_filters_are_never_object_hosts() {
+        let creature = TargetFilter::Typed(TypedFilter::creature());
+        assert!(
+            is_object_host_filter(&creature),
+            "reach-guard: objects pass"
+        );
+
+        let mixed = TargetFilter::Or {
+            filters: vec![creature.clone(), TargetFilter::Player],
+        };
+        assert!(
+            !is_object_host_filter(&mixed),
+            "Or[Typed(Creature), Player] must be rejected"
+        );
+        assert!(is_player_axis_filter(&mixed));
+        assert!(!is_object_host_filter(&TargetFilter::And {
+            filters: vec![creature.clone(), TargetFilter::Opponent],
+        }));
+
+        for filter in [
+            TargetFilter::Player,
+            TargetFilter::Controller,
+            TargetFilter::SourceController,
+            TargetFilter::Opponent,
+            TargetFilter::SpecificPlayer {
+                id: crate::types::player::PlayerId(1),
+            },
+            TargetFilter::PlayerMatching {
+                player: Box::new(PlayerFilter::Controller),
+            },
+            TargetFilter::Neighbor {
+                direction: crate::types::ability::SeatDirection::Left,
+            },
+            TargetFilter::ScopedPlayer,
+            TargetFilter::TriggeringPlayer,
+            TargetFilter::TriggeringSourceController,
+            TargetFilter::EventTargetController,
+            TargetFilter::ParentTargetController,
+            TargetFilter::ParentTargetOwner,
+            TargetFilter::DefendingPlayer,
+            TargetFilter::Owner,
+            TargetFilter::AllPlayers,
+            TargetFilter::Not {
+                filter: Box::new(TargetFilter::Player),
+            },
+        ] {
+            assert!(is_player_axis_filter(&filter), "{filter:?}");
+            assert!(!is_object_host_filter(&filter), "{filter:?}");
+        }
+
+        // A bare "target opponent" lowers to an all-controller `Typed`; the
+        // shared player authority catches it even though it is not a unit
+        // player variant.
+        let opponent_scope = TargetFilter::Typed(TypedFilter {
+            controller: Some(ControllerRef::Opponent),
+            ..TypedFilter::default()
+        });
+        assert!(
+            !is_object_host_filter(&opponent_scope),
+            "a controller-only Typed is a player read"
+        );
     }
 }

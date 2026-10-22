@@ -54488,4 +54488,43 @@ mod attached_set_walker_tests {
         assert!(!mass_population_concretizes_parent_legs(&damage.effect));
         assert!(!mass_population_concretizes_parent_legs(&attach.effect));
     }
+
+    /// P2b: an EMPTY parent set concretizes to `TargetFilter::None` (matches
+    /// nothing), never `Any` — the deliberate mirror of the `Not`
+    /// normalization. `Any` here would widen "that creature and its Auras" to
+    /// every Aura on the board when no referent was announced (CR 608.2b +
+    /// CR 608.2c).
+    #[test]
+    fn p2b_empty_parent_set_concretizes_to_none_not_any() {
+        let state = GameState::new_two_player(42);
+        let ability = ResolvedAbility::new(
+            Effect::DestroyAll {
+                target: TargetFilter::ParentTarget,
+                cant_regenerate: false,
+            },
+            Vec::new(),
+            ObjectId(900),
+            PlayerId(0),
+        );
+        let concretized = crate::game::filter::concretize_mass_population_parent_legs(
+            &state,
+            &ability,
+            &TargetFilter::ParentTarget,
+        );
+        assert_eq!(
+            concretized,
+            TargetFilter::None,
+            "an empty referent set matches nothing"
+        );
+        assert_ne!(
+            concretized,
+            TargetFilter::Any,
+            "an empty referent set must never widen"
+        );
+        assert_eq!(
+            resolved_object_filter(&state, &ability, &TargetFilter::ParentTarget),
+            TargetFilter::None,
+            "the mass-scan authority agrees with the direct concretion"
+        );
+    }
 }

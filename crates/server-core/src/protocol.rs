@@ -3473,6 +3473,13 @@ mod tests {
         }
     }
 
+    /// v156: `AttachmentReferent` gains `Host { filter }` (CR 701.3a + CR 303.4),
+    /// the filter-matched object-host axis for "all <filter> attached to
+    /// <referent>" (CR 608.2c). It serializes inside every ability definition
+    /// carried by `GameState`, so a v155 peer cannot parse state that names it
+    /// and must be refused before it receives v156 state; P2P moves in lockstep
+    /// (wire 138); lobby messages are unchanged.
+    ///
     /// v155: `PendingChangeZoneIteration.remaining` carries each member's
     /// pre-event entry modifications (`ChangeZoneMemberEntry`, CR 603.6a +
     /// CR 614.12) and drops the raw gate fields, and the persisted resolution
@@ -3736,8 +3743,8 @@ mod tests {
     /// `check-protocol-version.mjs` requires the current numeral in this name
     /// and refuses the superseded one.
     #[test]
-    fn protocol_version_is_155_for_pre_event_change_zone_entries() {
-        assert_eq!(PROTOCOL_VERSION, 155);
+    fn protocol_version_is_156_for_the_host_attachment_referent() {
+        assert_eq!(PROTOCOL_VERSION, 156);
     }
 
     /// The bump alone is inert — a version number nobody enforces prevents no
@@ -3748,7 +3755,7 @@ mod tests {
     ///
     /// REVERT-PROBE: relax to `PROTOCOL_VERSION - 1` — the exact regression
     /// this guards — and this test reds while
-    /// `protocol_version_is_155_for_pre_event_change_zone_entries` stays
+    /// `protocol_version_is_156_for_the_host_attachment_referent` stays
     /// green, which is why the two are separate assertions.
     #[test]
     fn full_game_floor_is_current_only_not_a_rollout_window() {
