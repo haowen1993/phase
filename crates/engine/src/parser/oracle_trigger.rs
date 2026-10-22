@@ -70,12 +70,12 @@ use crate::types::ability::ManaProduction;
 use crate::types::ability::{
     AbilityCondition, AbilityCost, AbilityDefinition, AbilityKind, AbilityTag,
     AdditionalCostOrigin, AdditionalCostPaymentSource, AggregateFunction, AttachmentKind,
-    AttackersDeclaredCountSubject, CardSelectionMode, CardTypeSetSource, CastManaObjectScope,
-    CastManaSpentMetric, CastVariantPaid, CoinFlipResult, CombatRelation, CombatRelationSubject,
-    Comparator, ControllerRef, CountScope, CounterTriggerFilter, DamageAmountScope,
-    DamageAmountThreshold, DamageChannel, DamageKindFilter, DelayedTriggerCondition,
-    DestinationConstraint, DieResultFilter, Effect, EffectScope, FilterProp,
-    IllegalTargetsDisposition, ManaAbilityProducedFilter, NameStickerSet, ObjectScope,
+    AttachmentReferent, AttackersDeclaredCountSubject, CardSelectionMode, CardTypeSetSource,
+    CastManaObjectScope, CastManaSpentMetric, CastVariantPaid, CoinFlipResult, CombatRelation,
+    CombatRelationSubject, Comparator, ControllerRef, CountScope, CounterTriggerFilter,
+    DamageAmountScope, DamageAmountThreshold, DamageChannel, DamageKindFilter,
+    DelayedTriggerCondition, DestinationConstraint, DieResultFilter, Effect, EffectScope,
+    FilterProp, IllegalTargetsDisposition, ManaAbilityProducedFilter, NameStickerSet, ObjectScope,
     OriginConstraint, ParsedCondition, PlayerFilter, PlayerRelation, PlayerScope,
     PropertyAggregate, PtStat, PtValueScope, QuantityExpr, QuantityRef, RenownSubject,
     SacrificeAggregateStat, SacrificeCost, SacrificeRequirement, SharedQuality, SpentColor,
@@ -3486,6 +3486,12 @@ fn rebind_parent_target_to_event_target_in_prop(prop: &mut FilterProp) {
         | FilterProp::Targets { filter: target } => {
             rebind_parent_target_to_event_target_in_filter(target);
         }
+        // CR 701.3a: a mass object set defined by attachment to the parent
+        // referent ("destroy all Auras attached to that creature") names the
+        // parent inside the host filter, so a BecomesTarget rebind must reach it.
+        FilterProp::AttachedTo {
+            to: AttachmentReferent::Host { filter: target },
+        } => rebind_parent_target_to_event_target_in_filter(target),
         FilterProp::SharesQuality {
             reference: Some(reference),
             ..
@@ -3526,6 +3532,12 @@ fn filter_prop_contains_event_target(prop: &FilterProp) -> bool {
         | FilterProp::DistinctFrom { reference: target }
         | FilterProp::TargetsOnly { filter: target }
         | FilterProp::Targets { filter: target } => target_filter_contains_event_target(target),
+        // CR 701.3a: the filter-matched host axis nests its own `TargetFilter`, so
+        // a host referent that names the triggering event is found by the same
+        // recursion (the rebind above must agree with this detector).
+        FilterProp::AttachedTo {
+            to: AttachmentReferent::Host { filter: target },
+        } => target_filter_contains_event_target(target),
         FilterProp::SharesQuality {
             reference: Some(reference),
             ..
@@ -24583,5 +24595,50 @@ mod structural_marker_tests {
         ] {
             assert!(parse(declined).is_none(), "{declined:?}");
         }
+    }
+}
+
+/// CR 120.1 + CR 120.3 + CR 701.3a: P16 — the trigger rebind walkers reach a
+/// `Host { ParentTarget }` filter, so a `BecomesTarget` trigger rebinds the host
+/// anaphor too.
+#[cfg(test)]
+mod attached_set_trigger_tests {
+    use super::*;
+    use crate::types::ability::{AttachmentReferent, TypedFilter};
+
+    fn host_prop(filter: TargetFilter) -> FilterProp {
+        FilterProp::AttachedTo {
+            to: AttachmentReferent::Host {
+                filter: Box::new(filter),
+            },
+        }
+    }
+
+    #[test]
+    fn p16_event_target_walkers_recurse_into_the_host_filter() {
+        let mut prop = host_prop(TargetFilter::ParentTarget);
+        assert!(filter_prop_contains_event_target(&prop));
+        rebind_parent_target_to_event_target_in_prop(&mut prop);
+        assert!(
+            matches!(
+                &prop,
+                FilterProp::AttachedTo {
+                    to: AttachmentReferent::Host { filter }
+                } if **filter == TargetFilter::EventTarget
+            ),
+            "the host leaf is rebound to EventTarget, got {prop:?}"
+        );
+
+        // Hostile control: a Host over an explicit typed filter names no event
+        // target, so neither walker fires.
+        let mut typed = host_prop(TargetFilter::Typed(TypedFilter::creature()));
+        assert!(!filter_prop_contains_event_target(&typed));
+        rebind_parent_target_to_event_target_in_prop(&mut typed);
+        assert!(matches!(
+            &typed,
+            FilterProp::AttachedTo {
+                to: AttachmentReferent::Host { filter }
+            } if **filter == TargetFilter::Typed(TypedFilter::creature())
+        ));
     }
 }

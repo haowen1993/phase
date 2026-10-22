@@ -982,6 +982,10 @@ fn fmt_typed_filter(tf: &TypedFilter) -> String {
             FilterProp::AttachedTo {
                 to: AttachmentReferent::DeclaredTarget { slot },
             } => parts.push(format!("attached to target #{slot}")),
+            // CR 701.3a: the filter-matched host axis — "attached to <host>".
+            FilterProp::AttachedTo {
+                to: AttachmentReferent::Host { filter },
+            } => parts.push(format!("attached to {}", fmt_target(filter))),
             FilterProp::Unpaired => parts.push("unpaired".into()),
             FilterProp::HasAttachment {
                 kind,
