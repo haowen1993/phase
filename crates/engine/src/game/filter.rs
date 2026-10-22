@@ -26582,6 +26582,29 @@ mod attached_set_host_filter_tests {
         ));
     }
 
+    /// P14(c): a pinned host with no departure record matches nothing. The
+    /// exit-time attachment set is the only LKI answer, so an id that merely
+    /// vanished (no CR 608.2h record written) must not resurrect the relation.
+    #[test]
+    fn p14c_pinned_host_without_a_departure_record_matches_nothing() {
+        let mut state = state();
+        let host = creature(&mut state, PlayerId(1), "Host");
+        let att = aura(&mut state, PlayerId(1), "Aura");
+        attach_to(&mut state, att, host);
+        let mut ability = ability(destroyed(), vec![TargetRef::Object(host)]);
+        ability.announce_target_pins(&state);
+        // A snapshot whose host no longer exists and for which the zone-change
+        // ledger holds no record: nothing can answer the attachment relation.
+        state.objects.remove(&host);
+        let filter = host_filter(TargetFilter::ParentTarget);
+        assert!(!matches_target_filter(
+            &state,
+            att,
+            &filter,
+            &FilterContext::from_ability(&ability)
+        ));
+    }
+
     /// P14(d): `Host { TriggeringSource }` resolves from the event's subject.
     #[test]
     fn p14d_triggering_source_host_resolves_from_the_event() {

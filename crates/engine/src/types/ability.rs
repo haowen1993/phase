@@ -7008,7 +7008,9 @@ pub enum AttachmentReferent {
     /// CR 701.3a + CR 603.7c + CR 608.2h (+ CR 601.2c for an announced host):
     /// the filter-matched host axis — "attached to any object in `filter`'s
     /// referent set". Covers a mass object set defined by attachment to a
-    /// referenced permanent or player: "destroy all Auras attached to that
+    /// referenced permanent (the player axis lowers to
+    /// [`Self::Player`](AttachmentReferent::Player) or declines): "destroy all
+    /// Auras attached to that
     /// creature" (Treefolk Mystic, Corrosive Ooze), "… attached to that
     /// creature to ~" (Rhuk, Hexgold Nabber), "… attached to creatures" (End
     /// Hostilities), "destroy all Auras and Equipment attached to target

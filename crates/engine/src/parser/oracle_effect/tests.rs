@@ -84614,8 +84614,8 @@ fn p24_variable_prefix_never_translates_a_local_slot() {
         variable,
         "Probe",
         &[],
-        &[],
         &attached_set_type_list("Sorcery"),
+        &[],
     );
     let json = serde_json::to_string(&parsed).unwrap();
     assert!(
@@ -84632,7 +84632,7 @@ fn p24_variable_prefix_never_translates_a_local_slot() {
     );
 
     let fixed = "Tap target land. Choose target creature and target artifact. Destroy all Equipment attached to that creature.";
-    let parsed = parse_oracle_text(fixed, "Probe", &[], &[], &attached_set_type_list("Sorcery"));
+    let parsed = parse_oracle_text(fixed, "Probe", &[], &attached_set_type_list("Sorcery"), &[]);
     assert!(
         !serde_json::to_string(&parsed)
             .unwrap()

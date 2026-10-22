@@ -6189,9 +6189,16 @@ mod arena_tests {
             (2, false),
             "reach guard: the determiner-led leg survives the keyword suffix"
         );
-        let (_, has_gap) = destroys(
-            "Destroy target creature with flying and all Equipment attached to that creature.",
+        // CR 115.1 + CR 701.3a: the attached-set compound class now parses
+        // (the host is the just-announced creature target), so the relation no
+        // longer falls back to a gap. The failure this probe used to pin was
+        // the unmodelled mass-attachment relation itself.
+        assert_eq!(
+            destroys(
+                "Destroy target creature with flying and all Equipment attached to that creature."
+            ),
+            (2, false),
+            "the attached-set relation is claimed, not a gap"
         );
-        assert!(has_gap, "the attachment relation must fail closed");
     }
 }

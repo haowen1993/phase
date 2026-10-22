@@ -42,6 +42,8 @@ const EATEN_BY_SPIDERS: &str =
 const WITCHBANE_ORB: &str =
     "When this artifact enters, destroy all Curses attached to you.\nYou have hexproof.";
 const MURDEROUS_SPOILS: &str = "Destroy target nonblack creature. It can't be regenerated. You gain control of all Equipment that were attached to it. (This effect lasts indefinitely.)";
+const SOUL_NOVA: &str = "Exile target attacking creature and all Equipment attached to it.";
+const SCARAB_OF_THE_UNSEEN: &str = "{T}, Sacrifice this artifact: Return all Auras attached to target permanent you own to their owners' hands. Draw a card at the beginning of the next end step.";
 const END_HOSTILITIES: &str = "Destroy all creatures and all permanents attached to creatures.";
 const TAWNOS_COFFIN: &str = "You may choose not to untap this artifact during your untap step.\n{3}, {T}: Exile target creature and all Auras attached to it. Note the number and kind of counters that were on that creature. When this artifact leaves the battlefield or becomes untapped, return that exiled card to the battlefield under its owner's control tapped with the noted number and kind of counters on it. If you do, return the other exiled cards to the battlefield under their owners' control attached to that permanent.";
 const TREEFOLK_MYSTIC: &str = "Whenever this creature blocks or becomes blocked by a creature, destroy all Auras attached to that creature.";
@@ -438,6 +440,94 @@ fn r7_silence_exiles_each_chosen_creature_and_its_auras() {
 }
 
 // ---------------------------------------------------------------------------
+// R8: Soul Nova — an announced attacking host (family C)
+// ---------------------------------------------------------------------------
+
+/// R8 (CR 115.1a + CR 701.8a + CR 400.7): "Exile target attacking creature and
+/// all Equipment attached to it" exiles the announced attacker and its
+/// Equipment in one instruction; Equipment on a different creature survives.
+#[test]
+fn r8_soul_nova_exiles_the_attacking_host_and_its_equipment() {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::BeginCombat);
+    let attacker = scenario.add_creature(P1, "Attacker", 2, 7).id();
+    let bystander = scenario.add_creature(P1, "Bystander", 2, 7).id();
+    let attacker_eq = equipment(&mut scenario, P1, "Attacker Equipment");
+    let bystander_eq = equipment(&mut scenario, P1, "Bystander Equipment");
+    let spell = free_spell(&mut scenario, "Soul Nova", true, SOUL_NOVA);
+    let mut runner = scenario.build();
+    attach_at(&mut runner, attacker_eq, attacker);
+    attach_at(&mut runner, bystander_eq, bystander);
+    hand_turn_to(&mut runner, P1);
+    runner
+        .declare_attackers(&[(attacker, engine::game::combat::AttackTarget::Player(P0))])
+        .expect("declare the attacker");
+    settle(&mut runner);
+
+    let outcome = runner.cast(spell).target_objects(&[attacker]).resolve();
+    assert!(
+        matches!(outcome.final_waiting_for(), WaitingFor::Priority { .. }),
+        "{:?}",
+        outcome.final_waiting_for()
+    );
+    let state = outcome.state();
+    assert_eq!(state.objects[&attacker].zone, Zone::Exile);
+    assert_eq!(state.objects[&attacker_eq].zone, Zone::Exile);
+    assert_eq!(
+        state.objects[&bystander_eq].zone,
+        Zone::Battlefield,
+        "Equipment on another creature is not the announced host's"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R11: Scarab of the Unseen — a family-B activated announced host
+// ---------------------------------------------------------------------------
+
+/// R11 (CR 115.1a + CR 601.2c + CR 701.26): the activated ability announces a
+/// permanent its controller owns, and only the Auras attached to it return to
+/// hand; the host stays on the battlefield.
+#[test]
+fn r11_scarab_of_the_unseen_returns_the_hosts_auras_only() {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+    let host = scenario.add_creature(P0, "Host", 2, 7).id();
+    let other = scenario.add_creature(P0, "Other", 2, 7).id();
+    let on_host = aura(&mut scenario, P0, "Aura on Host");
+    let on_other = aura(&mut scenario, P0, "Aura on Other");
+    let scarab = scenario
+        .add_artifact_from_oracle(P0, "Scarab of the Unseen", SCARAB_OF_THE_UNSEEN)
+        .with_mana_cost(ManaCost::generic(0))
+        .id();
+    let mut runner = scenario.build();
+    attach_at(&mut runner, on_host, host);
+    attach_at(&mut runner, on_other, other);
+
+    let outcome = runner.activate(scarab, 0).target_object(host).resolve();
+    assert!(
+        matches!(outcome.final_waiting_for(), WaitingFor::Priority { .. }),
+        "{:?}",
+        outcome.final_waiting_for()
+    );
+    let state = outcome.state();
+    assert_eq!(
+        state.objects[&on_host].zone,
+        Zone::Hand,
+        "the Aura attached to the announced host returns to its owner's hand"
+    );
+    assert_eq!(
+        state.objects[&on_other].zone,
+        Zone::Battlefield,
+        "an Aura on another permanent is not attached to the host"
+    );
+    assert_eq!(
+        state.objects[&host].zone,
+        Zone::Battlefield,
+        "the host is announced, not affected"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // R9: Eaten by Spiders — flying restriction
 // ---------------------------------------------------------------------------
 
@@ -727,10 +817,16 @@ fn r17_end_hostilities_destroys_creatures_and_their_attachments() {
     let land = scenario.add_land_from_oracle(P1, "Land", "").id();
     let on_creature = aura(&mut scenario, P1, "Aura on Creature");
     let on_land = aura(&mut scenario, P1, "Aura on Land");
+    // CR 704.5n: an Equipment whose host leaves the battlefield stays on the
+    // battlefield, so it can only reach the graveyard through the modelled
+    // "all permanents attached to creatures" leg. The Aura is a secondary
+    // assertion because CR 704.5m would kill it anyway.
+    let equipment = equipment(&mut scenario, P1, "Equipment on Creature");
     let spell = free_spell(&mut scenario, "End Hostilities", false, END_HOSTILITIES);
     let mut runner = scenario.build();
     attach_at(&mut runner, on_creature, creature);
     attach_at(&mut runner, on_land, land);
+    attach_at(&mut runner, equipment, creature);
 
     let outcome = runner.cast(spell).resolve();
     assert!(
@@ -740,6 +836,12 @@ fn r17_end_hostilities_destroys_creatures_and_their_attachments() {
     );
     let state = outcome.state();
     assert_eq!(state.objects[&creature].zone, Zone::Graveyard);
+    assert_eq!(
+        state.objects[&equipment].zone,
+        Zone::Graveyard,
+        "DISCRIMINATING (CR 704.5n): the Equipment is destroyed by the mass leg, \
+         not by the host leaving"
+    );
     assert_eq!(
         state.objects[&on_creature].zone,
         Zone::Graveyard,
