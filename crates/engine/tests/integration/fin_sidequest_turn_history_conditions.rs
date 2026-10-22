@@ -1730,7 +1730,8 @@ fn fumble_plural_attachment_anaphor_is_unsupported() {
         parsed.abilities
     );
 
-    // The bounce resolved; the refused control-gain clause changed nothing.
+    // The bounce resolved; the modelled control-gain clause moved the
+    // Equipment controller to the caster (asserted below).
     assert_eq!(
         outcome.zone_of(victim),
         Zone::Hand,

@@ -463,6 +463,10 @@ fn r8_soul_nova_exiles_the_attacking_host_and_its_equipment() {
         .declare_attackers(&[(attacker, engine::game::combat::AttackTarget::Player(P0))])
         .expect("declare the attacker");
     settle(&mut runner);
+    // The attacker's controller owns the combat turn; hand the instant window
+    // to P0 (the spell's owner) so the cast is legal.
+    runner.state_mut().priority_player = P0;
+    runner.state_mut().waiting_for = WaitingFor::Priority { player: P0 };
 
     let outcome = runner.cast(spell).target_objects(&[attacker]).resolve();
     assert!(

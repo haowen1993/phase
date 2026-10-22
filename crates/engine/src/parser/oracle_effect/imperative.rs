@@ -12731,7 +12731,26 @@ fn parse_context_set_referent<'a>(
         // parser already bound (`ctx.object_pronoun_ref`) is an established
         // antecedent and is admitted ungated.
         TargetFilter::ParentTarget => {
-            if ctx.object_pronoun_ref.is_none() && !ctx.in_trigger {
+            // CR 700.2: a modal mode's declared numbering is mode-local, so an
+            // anaphor that only the shared target parse could bind keeps its
+            // gap instead of guessing a chain slot.
+            if ctx.body_scope == crate::parser::oracle_ir::context::BodyScope::ModalMode {
+                return None;
+            }
+            // CR 608.2c: a non-trigger anaphor is admitted only when the
+            // parser BOUND it (`object_pronoun_ref`) and the chain's declared
+            // numbering is not ambiguous. With two or more numbered object
+            // slots the nearest-declarer rule is ambiguous ("Tap target
+            // creature. ~ deals 1 damage to target creature. Destroy all
+            // Equipment attached to that creature."), and `ParentTarget` would
+            // bind the FIRST selected target instead. Fail closed.
+            let ambiguous_chain = match &ctx.chain_declared_slots {
+                super::DeclaredSlotRegistry::Known(entries) => {
+                    entries.iter().filter(|entry| entry.index.is_some()).count() > 1
+                }
+                super::DeclaredSlotRegistry::Indeterminate => false,
+            };
+            if ambiguous_chain || (ctx.object_pronoun_ref.is_none() && !ctx.in_trigger) {
                 return None;
             }
             Some((

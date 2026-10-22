@@ -26583,18 +26583,59 @@ mod attached_set_host_filter_tests {
     }
 
     /// P14(c): a pinned host with no departure record matches nothing. The
-    /// exit-time attachment set is the only LKI answer, so an id that merely
-    /// vanished (no CR 608.2h record written) must not resurrect the relation.
+    /// exit-time attachment set is the only LKI answer, so an id whose exit the
+    /// CR 608.2h ledger never recorded must not resurrect the relation — even
+    /// when an id-only `lki_cache` read would match.
     #[test]
     fn p14c_pinned_host_without_a_departure_record_matches_nothing() {
         let mut state = state();
         let host = creature(&mut state, PlayerId(1), "Host");
         let att = aura(&mut state, PlayerId(1), "Aura");
         attach_to(&mut state, att, host);
+        // Build the payload the way delayed-trigger creation does: a creation
+        // snapshot (unpinned targets + incarnation pins), NOT positional pins.
+        // This is what enters the tier-1 `Pinned { EffectApplication }` read.
         let mut ability = ability(destroyed(), vec![TargetRef::Object(host)]);
-        ability.announce_target_pins(&state);
-        // A snapshot whose host no longer exists and for which the zone-change
-        // ledger holds no record: nothing can answer the attachment relation.
+        ability.set_target_incarnations_recursive(vec![
+            crate::types::identifiers::ObjectIncarnationRef::from_object(&state.objects[&host]),
+        ]);
+        ability.set_unpinned_targets(vec![TargetRef::Object(host)]);
+        // An LKI snapshot DOES exist, so an id-only read would match. The
+        // zone-change ledger holds no record for this exit, and that is the
+        // authority the pinned arm must consult.
+        state.lki_cache.insert(
+            host,
+            crate::types::game_state::LKISnapshot {
+                name: "Host".into(),
+                token_image_ref: None,
+                power: Some(2),
+                toughness: Some(2),
+                base_power: Some(2),
+                base_toughness: Some(2),
+                mana_value: 2,
+                controller: PlayerId(1),
+                owner: PlayerId(1),
+                card_types: vec![CoreType::Creature],
+                subtypes: vec![],
+                supertypes: vec![],
+                keywords: vec![],
+                colors: vec![],
+                chosen_attributes: Vec::new(),
+                counters: Default::default(),
+                tapped: false,
+                is_suspected: false,
+                attachments: vec![crate::types::game_state::AttachmentSnapshot {
+                    object_id: att,
+                    identity: Some(
+                        crate::types::identifiers::ObjectIncarnationRef::from_object(
+                            &state.objects[&att],
+                        ),
+                    ),
+                    controller: PlayerId(1),
+                    kind: crate::types::ability::AttachmentKind::Aura,
+                }],
+            },
+        );
         state.objects.remove(&host);
         let filter = host_filter(TargetFilter::ParentTarget);
         assert!(!matches_target_filter(

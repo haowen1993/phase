@@ -313,7 +313,7 @@ fn fiery_annihilation_narrows_equipment_slot_and_binds_rider_to_creature_slot() 
 /// load-bearing half. Shackles of Treachery's granted-trigger clause names no
 /// slot either and keeps its pre-existing `unparsed_verb_arguments` gap.
 #[test]
-fn referents_without_a_declared_slot_keep_their_gap() {
+fn referents_without_a_declared_slot_lower_to_the_filter_matched_host() {
     for (oracle, name, core) in [
         (TREEFOLK_MYSTIC, "Treefolk Mystic", "Creature"),
         (CORROSIVE_OOZE, "Corrosive Ooze", "Creature"),

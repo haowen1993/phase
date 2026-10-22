@@ -4872,7 +4872,10 @@ mod arena_tests {
     use crate::parser::oracle_nom::context::ParseContext;
     #[cfg(feature = "cli")]
     use crate::types::ability::OpponentMayScope;
-    use crate::types::ability::{DelayedTriggerCondition, ReplacementDefinition};
+    use crate::types::ability::{
+        AttachmentReferent, DelayedTriggerCondition, FilterProp, ReplacementDefinition,
+        TargetFilter,
+    };
     use crate::types::phase::Phase;
     use crate::types::replacements::ReplacementEvent;
     use crate::types::zones::EtbTapState;
@@ -6156,11 +6159,12 @@ mod arena_tests {
 
     /// CR 608.2c + CR 301.5: "Destroy target creature with flying and all Equipment
     /// attached to that creature" must not lose the Equipment leg to the keyword
-    /// suffix, and the attachment relation has no filter form, so the leg fails
-    /// closed rather than destroying every Equipment. Paired positive: a
-    /// determiner-led second leg without the relation lowers to a second destroy.
+    /// suffix. The relation is the filter form `FilterProp::AttachedTo`, so the
+    /// leg lowers as an announced head plus one mass destroy whose population
+    /// unions the host and its attachments. Paired positive: a determiner-led
+    /// second leg without the relation lowers to a second destroy.
     #[test]
-    fn keyword_suffix_determiner_leg_is_kept_or_fails_closed() {
+    fn keyword_suffix_determiner_leg_keeps_the_attached_set() {
         let destroys = |text: &str| -> (usize, bool) {
             let parsed = crate::parser::parse_oracle_text(
                 text,
@@ -6189,32 +6193,54 @@ mod arena_tests {
             (2, false),
             "reach guard: the determiner-led leg survives the keyword suffix"
         );
-        // CR 115.1 + CR 701.3a: the attached-set compound class now parses as
-        // a head that announces the creature plus ONE mass destroy whose
+        // CR 115.1 + CR 701.3a: the attached-set compound class parses as a
+        // head that announces the creature plus ONE mass destroy whose
         // population unions the announced host with the Equipment attached to
-        // it — one counted destroy effect, and no gap. The failure this probe
-        // used to pin was the unmodelled mass-attachment relation itself.
+        // it — asserted structurally below, so a regression that dropped the
+        // announcing head (destroying every flyer) cannot pass.
         let attached_set =
             "Destroy target creature with flying and all Equipment attached to that creature.";
-        assert_eq!(
-            destroys(attached_set),
-            (1, false),
-            "the attached-set relation is claimed, not a gap"
+        let parsed = crate::parser::parse_oracle_text(
+            attached_set,
+            "Leg Probe",
+            &[],
+            &["Sorcery".to_string()],
+            &[],
         );
-        let debug = format!(
-            "{:?}",
-            crate::parser::parse_oracle_text(
-                attached_set,
-                "Leg Probe",
-                &[],
-                &["Sorcery".to_string()],
-                &[],
-            )
-            .abilities
+        let chain: Vec<&Effect> =
+            std::iter::successors(parsed.abilities.first(), |node| node.sub_ability.as_deref())
+                .map(|node| &*node.effect)
+                .collect();
+        assert!(
+            matches!(chain.first(), Some(Effect::TargetOnly { .. })),
+            "the announced head is a TargetOnly slot: {chain:?}"
         );
-        // allow-noncombinator: assertion on a Debug rendering, not parsing dispatch
-        assert!(debug.contains("AttachedTo"), "{debug}");
-        // allow-noncombinator: assertion on a Debug rendering, not parsing dispatch
-        assert!(debug.contains("Host"), "{debug}");
+        let Some(Effect::DestroyAll { target, .. }) = chain.get(1) else {
+            panic!("one mass destroy follows the head: {chain:?}");
+        };
+        let TargetFilter::Or { filters } = target else {
+            panic!("the population unions host and attachments: {target:?}");
+        };
+        assert!(
+            filters
+                .iter()
+                .any(|leg| matches!(leg, TargetFilter::ParentTarget)),
+            "the announced host is in the population: {target:?}"
+        );
+        assert!(
+            filters.iter().any(|leg| {
+                matches!(
+                    leg,
+                    TargetFilter::Typed(tf)
+                        if tf.properties.iter().any(|prop| matches!(
+                            prop,
+                            FilterProp::AttachedTo {
+                                to: AttachmentReferent::Host { .. }
+                            }
+                        ))
+                )
+            }),
+            "the attached set carries the Host relation: {target:?}"
+        );
     }
 }
