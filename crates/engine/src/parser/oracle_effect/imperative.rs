@@ -13070,9 +13070,22 @@ fn parse_context_set_referent<'a>(
             // nearest declarer. Fail closed.
             let ambiguous_chain = match &ctx.chain_declared_slots {
                 super::DeclaredSlotRegistry::Known(entries) => {
-                    entries.iter().filter(|entry| entry.index.is_some()).count() > 1
+                    // Eligibility first: an entry that reads a declared slot can
+                    // never be the antecedent, so it is not evidence either way.
+                    let eligible = entries.iter().filter(|entry| {
+                        !crate::game::filter::filter_reads_declared_slot(&entry.filter)
+                    });
+                    // An incomplete registry (any eligible entry without a
+                    // chain-wide index) cannot prove the nearest declarer.
+                    if eligible.clone().any(|entry| entry.index.is_none()) {
+                        true
+                    } else {
+                        eligible.filter(|entry| entry.index.is_some()).count() > 1
+                    }
                 }
-                super::DeclaredSlotRegistry::Indeterminate => false,
+                // Indeterminate is not "unambiguous": the chain's numbering
+                // could not be established at all.
+                super::DeclaredSlotRegistry::Indeterminate => true,
             };
             if ambiguous_chain || (ctx.object_pronoun_ref.is_none() && !ctx.in_trigger) {
                 return None;

@@ -85474,6 +85474,67 @@ fn p20_pronoun_entry_point_is_separate_from_the_shared_resolver() {
     indeterminate.chain_declared_slots =
         crate::parser::oracle_ir::context::DeclaredSlotRegistry::Indeterminate;
     assert!(super::resolve_pronoun_declared_slot_anaphor("them", &indeterminate).is_none());
+
+    // A MIXED registry is incomplete, not "one numbered slot": the unnumbered
+    // entry means the chain's numbering could not be recorded for that slot, so
+    // the sole numbered entry must not be bound on a guess.
+    let mut mixed = ctx.clone();
+    mixed.chain_declared_slots =
+        crate::parser::oracle_ir::context::DeclaredSlotRegistry::Known(vec![
+            crate::parser::oracle_ir::context::DeclaredSlotEntry {
+                index: Some(0),
+                filter: TargetFilter::Typed(TypedFilter::creature()),
+            },
+            crate::parser::oracle_ir::context::DeclaredSlotEntry {
+                index: None,
+                filter: TargetFilter::Typed(TypedFilter::creature()),
+            },
+        ]);
+    assert!(
+        super::resolve_pronoun_declared_slot_anaphor("them", &mixed).is_none(),
+        "an incomplete registry is not a unique antecedent"
+    );
+}
+
+/// The imperative ParentTarget fallback shares the same incompleteness rule:
+/// `Indeterminate` and a mixed registry both decline a parser-bound pronoun,
+/// while the single numbered slot still binds.
+#[test]
+fn p20b_parent_target_fallback_declines_incomplete_registries() {
+    let clause = "destroy all Auras attached to it";
+    let mut bound = ParseContext {
+        object_pronoun_ref: Some(TargetFilter::ParentTarget),
+        ..Default::default()
+    };
+    assert!(
+        super::imperative::parse_attached_set_clause(clause, &mut bound).is_some(),
+        "positive control: a bound pronoun over a single numbered slot parses"
+    );
+
+    let mut indeterminate = bound.clone();
+    indeterminate.chain_declared_slots =
+        crate::parser::oracle_ir::context::DeclaredSlotRegistry::Indeterminate;
+    assert!(
+        super::imperative::parse_attached_set_clause(clause, &mut indeterminate).is_none(),
+        "an Indeterminate registry cannot prove the nearest declarer"
+    );
+
+    let mut mixed = bound.clone();
+    mixed.chain_declared_slots =
+        crate::parser::oracle_ir::context::DeclaredSlotRegistry::Known(vec![
+            crate::parser::oracle_ir::context::DeclaredSlotEntry {
+                index: Some(0),
+                filter: TargetFilter::Typed(TypedFilter::creature()),
+            },
+            crate::parser::oracle_ir::context::DeclaredSlotEntry {
+                index: None,
+                filter: TargetFilter::Typed(TypedFilter::creature()),
+            },
+        ]);
+    assert!(
+        super::imperative::parse_attached_set_clause(clause, &mut mixed).is_none(),
+        "a mixed registry is incomplete, not unambiguous"
+    );
 }
 
 /// P21 (RF5): the promoted demonstrative recognizer keeps the counter helper's

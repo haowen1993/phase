@@ -1506,6 +1506,24 @@ pub struct FilterContext<'a> {
 }
 
 impl<'a> FilterContext<'a> {
+    /// Preserve a caller's already-resolved source authority instead of
+    /// rebuilding it from `ability` or the live object: the controller override
+    /// (`from_ability_with_controller`) and the carried recipient, trigger and
+    /// declared-slot bindings all survive into a nested host evaluation.
+    fn from_source_context(source: &SourceContext<'a>) -> Self {
+        Self {
+            source_id: source.id,
+            source_controller: source.controller,
+            ability: source.ability,
+            trigger_source: source.trigger_source,
+            recipient_id: source.recipient_id,
+            scoped_iteration_player: None,
+            triggering_object: source.triggering_object,
+            declared_slot_view: source.declared_slot_view,
+            granting_object: source.granting_object,
+        }
+    }
+
     /// CR 601.2c: Bind the declared-target view for one evaluation (see
     /// [`FilterContext::declared_slot_view`]). Returns a fresh value; the
     /// caller's context is untouched.
@@ -1954,6 +1972,20 @@ pub(crate) fn zone_axis_admits(
 ///   exit record of THAT incarnation (the `ZoneChangeRecord` whose pre-change identity is the
 ///   pin), matching each candidate by its own incarnation rather than by a reusable id. A
 ///   referent that left and returned is a new object (CR 400.7) and is never read live.
+///
+/// CR 400.7 + CR 608.2h: the incarnation an event host anaphor proved when that
+/// object left the battlefield — read from the departure record the zone change
+/// wrote, so a look-back never lands on a later object in the same storage slot.
+fn event_host_incarnation(state: &GameState, host_id: ObjectId) -> Option<ObjectIncarnationRef> {
+    state
+        .zone_changes_this_turn
+        .iter()
+        .rev()
+        .find(|record| record.object_id == host_id && record.from_zone == Some(Zone::Battlefield))
+        .and_then(|record| record.trigger_source_context.as_ref())
+        .map(|context| context.identity.reference)
+}
+
 fn attached_to_referent(
     state: &GameState,
     referent: AttachmentReferentObject,
@@ -2123,9 +2155,9 @@ fn attached_to_declared_slot(
 ///
 /// A player referent is not possible in `Host` (the parser is object-only), and a
 /// player result from any tier is dropped.
-fn attached_to_host_filter(
+fn attached_to_host_filter<'a>(
     state: &GameState,
-    source: &SourceContext<'_>,
+    source: &SourceContext<'a>,
     filter: &TargetFilter,
     candidate: &GameObject,
     candidate_id: ObjectId,
@@ -2226,27 +2258,32 @@ fn attached_to_host_filter(
         }
         TargetFilter::TriggeringSource | TargetFilter::EventTarget | TargetFilter::AttachedTo => {
             match crate::game::targeting::resolve_event_context_target(state, filter, source.id) {
-                Some(TargetRef::Object(id)) => attached_to_referent(
-                    state,
-                    AttachmentReferentObject::ById(id),
-                    candidate,
-                    candidate_id,
-                ),
+                Some(TargetRef::Object(id)) => {
+                    // CR 400.7 + CR 608.2h: the event proves WHICH incarnation of
+                    // the host the anaphor names. When that incarnation left the
+                    // battlefield, pin its departure so the relation reads the
+                    // last-known attachment set instead of a later object that
+                    // happens to reuse the storage id.
+                    let referent = match event_host_incarnation(state, id) {
+                        Some(pin) => AttachmentReferentObject::Pinned {
+                            referent: crate::game::targeting::SlotReferent { id, pin },
+                            reading: ReferentReading::EffectApplication,
+                        },
+                        None => AttachmentReferentObject::ById(id),
+                    };
+                    attached_to_referent(state, referent, candidate, candidate_id)
+                }
                 _ => false,
             }
         }
         // Typed / Or / SpecificObject / any other object filter: scan the live
         // battlefield for the host set, then ask the shared relation authority.
         _ => {
-            let ctx = source
-                .ability
-                .map(FilterContext::from_ability)
-                .or_else(|| {
-                    source
-                        .trigger_source
-                        .map(FilterContext::from_trigger_source)
-                })
-                .unwrap_or_else(|| FilterContext::from_source(state, source.id));
+            // CR 109.4 + CR 601.2c: the caller's authority is authoritative for
+            // the nested host filter. Rebuilding from `ability` would restore the
+            // ability's controller over an explicit override and drop the carried
+            // recipient / trigger / declared-slot bindings.
+            let ctx = FilterContext::from_source_context(source);
             state.battlefield.iter().copied().any(|host_id| {
                 matches_target_filter(state, host_id, filter, &ctx)
                     && attached_to_referent(
@@ -27789,6 +27826,95 @@ mod attached_set_host_filter_tests {
             &filter,
             &FilterContext::from_ability(&ability)
         ));
+    }
+
+    /// P14(h) — the caller's controller override is authoritative for a nested
+    /// host filter. The ability's own controller is P0, but a mass-move remap
+    /// dispatches the effect for P1; "attached to a creature YOU control" must
+    /// then mean P1's creature, not P0's.
+    #[test]
+    fn p14h_host_evaluation_preserves_the_callers_controller_override() {
+        let mut state = state();
+        let theirs = creature(&mut state, PlayerId(1), "Their Creature");
+        let att = aura(&mut state, PlayerId(1), "Aura");
+        attach_to(&mut state, att, theirs);
+        let ability = ability(destroyed(), vec![TargetRef::Object(theirs)]);
+        let mut host_type = crate::types::ability::TypedFilter::creature();
+        host_type.controller = Some(crate::types::ability::ControllerRef::You);
+        let filter = host_filter(TargetFilter::Typed(host_type));
+        assert!(
+            !matches_target_filter(&state, att, &filter, &FilterContext::from_ability(&ability)),
+            "the ability's controller (P0) does not control the host"
+        );
+        assert!(
+            matches_target_filter(
+                &state,
+                att,
+                &filter,
+                &FilterContext::from_ability_with_controller(&ability, PlayerId(1))
+            ),
+            "the caller's controller override is authoritative for the nested host"
+        );
+    }
+
+    /// P14(i) — the event host's INCARNATION, not its storage slot. The event
+    /// proves the incarnation that died; when that object has already returned
+    /// (same `ObjectId`, bumped incarnation, attachments torn down), the
+    /// relation must read the departed incarnation's last-known attachment set.
+    #[test]
+    fn p14i_event_host_reads_the_departed_incarnation_not_a_reused_slot() {
+        let mut state = state();
+        let host = creature(&mut state, PlayerId(1), "Departed Host");
+        let att = aura(&mut state, PlayerId(1), "Attached Aura");
+        attach_to(&mut state, att, host);
+        let departed =
+            crate::types::identifiers::ObjectIncarnationRef::from_object(&state.objects[&host]);
+        let source_context =
+            crate::game::trigger_matchers::test_trigger_source_context(&state, host);
+        state
+            .zone_changes_this_turn
+            .push_back(crate::types::game_state::ZoneChangeRecord {
+                attachments: vec![crate::types::game_state::AttachmentSnapshot {
+                    object_id: att,
+                    identity: Some(
+                        crate::types::identifiers::ObjectIncarnationRef::from_object(
+                            &state.objects[&att],
+                        ),
+                    ),
+                    controller: PlayerId(1),
+                    kind: crate::types::ability::AttachmentKind::Aura,
+                }],
+                trigger_source_context: Some(crate::types::game_state::TriggerSourceContext {
+                    identity: crate::types::identifiers::ObjectIdentityBinding::new(
+                        departed,
+                        Zone::Battlefield,
+                    ),
+                    ..source_context
+                }),
+                ..crate::types::game_state::ZoneChangeRecord::test_minimal(
+                    host,
+                    Some(Zone::Battlefield),
+                    Zone::Graveyard,
+                )
+            });
+
+        // The host returns as a NEW object in the same storage slot: its
+        // incarnation is bumped and the attachment is gone.
+        state.objects.get_mut(&host).unwrap().bump_incarnation();
+        state.objects.get_mut(&att).unwrap().attached_to = None;
+        state.current_trigger_event = Some(GameEvent::AttackersDeclared {
+            attacker_ids: vec![host],
+            defending_player: PlayerId(0),
+            attacks: vec![],
+            declaration_records: vec![],
+        });
+
+        let ability = ability(destroyed(), vec![]);
+        let filter = host_filter(TargetFilter::TriggeringSource);
+        assert!(
+            matches_target_filter(&state, att, &filter, &FilterContext::from_ability(&ability)),
+            "the departed incarnation's attachment set answers for the event host"
+        );
     }
 
     /// P14(f): `ParentTarget` with no targets, no event, and a non-attachment

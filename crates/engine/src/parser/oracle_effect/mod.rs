@@ -27298,21 +27298,28 @@ pub(super) fn resolve_pronoun_declared_slot_anaphor<'a>(
     let DeclaredSlotRegistry::Known(entries) = &ctx.chain_declared_slots else {
         return None;
     };
-    let mut matched: Option<usize> = None;
-    for entry in entries {
-        let Some(slot) = entry.index else {
-            continue;
-        };
-        if crate::game::filter::filter_reads_declared_slot(&entry.filter) {
-            continue;
-        }
-        // Zero or several numbered candidates: the pronoun names no unique slot.
-        if matched.is_some() {
-            return None;
-        }
-        matched = Some(slot);
+    // Eligibility comes first: a candidate whose own filter reads a declared
+    // slot is never an antecedent (referents never chain), so it is not
+    // evidence either way.
+    let eligible: Vec<&crate::parser::oracle_ir::context::DeclaredSlotEntry> = entries
+        .iter()
+        .filter(|entry| !crate::game::filter::filter_reads_declared_slot(&entry.filter))
+        .collect();
+    if eligible.is_empty() {
+        return None;
     }
-    matched.map(|slot| (slot, rest))
+    // An incomplete registry is not a signal: any eligible entry without a
+    // chain-wide index means the numbered subset does not name the chain's
+    // slots, so nothing is bound on a guess. Exactly one numbered candidate
+    // binds; zero or several decline.
+    let slots = eligible
+        .iter()
+        .map(|entry| entry.index)
+        .collect::<Option<Vec<usize>>>()?;
+    match slots.as_slice() {
+        [slot] => Some((*slot, rest)),
+        _ => None,
+    }
 }
 
 /// CR 115.1: does this clause announce a target of its OWN — an instance of the

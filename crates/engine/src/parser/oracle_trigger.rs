@@ -25054,7 +25054,7 @@ mod number_quality_bridge_tests {
     }
 }
 
-/// CR 120.1 + CR 120.3 + CR 701.3a: P16 — the trigger rebind walkers reach a
+/// CR 701.3a + CR 115.1: P16 — the trigger rebind walkers reach a
 /// `Host { ParentTarget }` filter, so a `BecomesTarget` trigger rebinds the host
 /// anaphor too.
 #[cfg(test)]

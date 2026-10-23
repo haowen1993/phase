@@ -43,7 +43,7 @@ const WITCHBANE_ORB: &str =
     "When this artifact enters, destroy all Curses attached to you.\nYou have hexproof.";
 const MURDEROUS_SPOILS: &str = "Destroy target nonblack creature. It can't be regenerated. You gain control of all Equipment that were attached to it. (This effect lasts indefinitely.)";
 const SOUL_NOVA: &str = "Exile target attacking creature and all Equipment attached to it.";
-const SCARAB_OF_THE_UNSEEN: &str = "{T}, Sacrifice this artifact: Return all Auras attached to target permanent you own to their owners' hands. Draw a card at the beginning of the next end step.";
+const SCARAB_OF_THE_UNSEEN: &str = "{T}, Sacrifice this artifact: Return all Auras attached to target permanent you own to their owners' hands. Draw a card at the beginning of the next turn's upkeep.";
 const END_HOSTILITIES: &str = "Destroy all creatures and all permanents attached to creatures.";
 const TAWNOS_COFFIN: &str = "You may choose not to untap this artifact during your untap step.\n{3}, {T}: Exile target creature and all Auras attached to it. Note the number and kind of counters that were on that creature. When this artifact leaves the battlefield or becomes untapped, return that exiled card to the battlefield under its owner's control tapped with the noted number and kind of counters on it. If you do, return the other exiled cards to the battlefield under their owners' control attached to that permanent.";
 const TREEFOLK_MYSTIC: &str = "Whenever this creature blocks or becomes blocked by a creature, destroy all Auras attached to that creature.";
@@ -156,7 +156,7 @@ fn r1_strip_bare_destroys_the_hosts_auras_and_equipment() {
     assert_eq!(
         state.objects[&host].zone,
         Zone::Battlefield,
-        "the host itself is not affected (CR 115.10a)"
+        "the host itself is not affected"
     );
 }
 
@@ -443,7 +443,7 @@ fn r7_silence_exiles_each_chosen_creature_and_its_auras() {
 // R8: Soul Nova — an announced attacking host (family C)
 // ---------------------------------------------------------------------------
 
-/// R8 (CR 115.1a + CR 701.8a + CR 400.7): "Exile target attacking creature and
+/// R8 (CR 115.1a + CR 701.13a + CR 400.7): "Exile target attacking creature and
 /// all Equipment attached to it" exiles the announced attacker and its
 /// Equipment in one instruction; Equipment on a different creature survives.
 #[test]
