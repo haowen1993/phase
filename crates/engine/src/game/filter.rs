@@ -1977,19 +1977,6 @@ pub(crate) fn zone_axis_admits(
 ///   pin), matching each candidate by its own incarnation rather than by a reusable id. A
 ///   referent that left and returned is a new object (CR 400.7) and is never read live.
 ///
-/// CR 400.7 + CR 608.2h: the incarnation an event host anaphor proved when that
-/// object left the battlefield — read from the departure record the zone change
-/// wrote, so a look-back never lands on a later object in the same storage slot.
-fn event_host_incarnation(state: &GameState, host_id: ObjectId) -> Option<ObjectIncarnationRef> {
-    state
-        .zone_changes_this_turn
-        .iter()
-        .rev()
-        .find(|record| record.object_id == host_id && record.from_zone == Some(Zone::Battlefield))
-        .and_then(|record| record.trigger_source_context.as_ref())
-        .map(|context| context.identity.reference)
-}
-
 fn attached_to_referent(
     state: &GameState,
     referent: AttachmentReferentObject,
@@ -2263,12 +2250,15 @@ fn attached_to_host_filter<'a>(
         TargetFilter::TriggeringSource | TargetFilter::EventTarget | TargetFilter::AttachedTo => {
             match crate::game::targeting::resolve_event_context_target(state, filter, source.id) {
                 Some(TargetRef::Object(id)) => {
-                    // CR 400.7 + CR 608.2h: the event proves WHICH incarnation of
-                    // the host the anaphor names. When that incarnation left the
-                    // battlefield, pin its departure so the relation reads the
-                    // last-known attachment set instead of a later object that
-                    // happens to reuse the storage id.
-                    let referent = match event_host_incarnation(state, id) {
+                    // CR 400.7 + CR 608.2h: the firing event proves WHICH
+                    // incarnation of the host the anaphor names. Pin exactly that
+                    // one: current → read live, departed → read its own exit
+                    // record. A different exit of the same storage id this turn
+                    // (an earlier blink) is not this ability's subject.
+                    let pin = state.current_trigger_event.as_ref().and_then(|event| {
+                        crate::game::targeting::event_context_incarnation(filter, event, id)
+                    });
+                    let referent = match pin {
                         Some(pin) => AttachmentReferentObject::Pinned {
                             referent: crate::game::targeting::SlotReferent { id, pin },
                             reading: ReferentReading::EffectApplication,
@@ -27913,6 +27903,31 @@ mod attached_set_host_filter_tests {
         }
     }
 
+    fn empty_lki() -> crate::types::game_state::LKISnapshot {
+        crate::types::game_state::LKISnapshot {
+            name: String::new(),
+            token_image_ref: None,
+            power: None,
+            toughness: None,
+            base_power: None,
+            base_toughness: None,
+            mana_value: 0,
+            controller: PlayerId(0),
+            owner: PlayerId(0),
+            card_types: Vec::new(),
+            subtypes: Vec::new(),
+            supertypes: Vec::new(),
+            keywords: Vec::new(),
+            colors: Vec::new(),
+            chosen_attributes: Vec::new(),
+            counters: Default::default(),
+            tapped: false,
+            is_suspected: false,
+            was_prepared: false,
+            attachments: Vec::new(),
+        }
+    }
+
     fn host_filter(filter: TargetFilter) -> TargetFilter {
         TargetFilter::Typed(TypedFilter {
             properties: vec![host_prop(filter)],
@@ -28092,12 +28107,11 @@ mod attached_set_host_filter_tests {
         );
     }
 
-    /// P14(i) — the event host's INCARNATION, not its storage slot. The event
-    /// proves the incarnation that died; when that object has already returned
-    /// (same `ObjectId`, bumped incarnation, attachments torn down), the
-    /// relation must read the departed incarnation's last-known attachment set.
+    /// P14(i) — the event host's INCARNATION comes from the firing event, not
+    /// from the storage id's latest exit. The attack record names the departed
+    /// incarnation; the same id has already returned with a bumped incarnation.
     #[test]
-    fn p14i_event_host_reads_the_departed_incarnation_not_a_reused_slot() {
+    fn p14i_event_host_reads_the_incarnation_the_event_names() {
         let mut state = state();
         let host = creature(&mut state, PlayerId(1), "Departed Host");
         let att = aura(&mut state, PlayerId(1), "Attached Aura");
@@ -28133,22 +28147,111 @@ mod attached_set_host_filter_tests {
                 )
             });
 
-        // The host returns as a NEW object in the same storage slot: its
-        // incarnation is bumped and the attachment is gone.
+        // The host returns as a NEW object in the same storage slot and loses
+        // the Aura; the attack record still names the departed incarnation.
         state.objects.get_mut(&host).unwrap().bump_incarnation();
         state.objects.get_mut(&att).unwrap().attached_to = None;
         state.current_trigger_event = Some(GameEvent::AttackersDeclared {
             attacker_ids: vec![host],
             defending_player: PlayerId(0),
             attacks: vec![],
-            declaration_records: vec![],
+            declaration_records: vec![crate::types::game_state::AttackDeclarationRecord {
+                object_id: host,
+                incarnation: Some(departed.incarnation),
+                lki: empty_lki(),
+                is_token: false,
+                is_commander: false,
+            }],
         });
 
         let ability = ability(destroyed(), vec![]);
         let filter = host_filter(TargetFilter::TriggeringSource);
         assert!(
             matches_target_filter(&state, att, &filter, &FilterContext::from_ability(&ability)),
-            "the departed incarnation's attachment set answers for the event host"
+            "the named departed incarnation's attachment set answers"
+        );
+    }
+
+    /// P14(j) — the counterexample the historical scan got wrong: an EARLIER
+    /// blink left a departure record for this id, but the firing attack names
+    /// the CURRENT incarnation, so the relation must read the live attachment
+    /// set (the new Equipment), never the old exit record.
+    #[test]
+    fn p14j_event_host_prefers_the_events_current_incarnation_over_an_earlier_exit() {
+        let mut state = state();
+        let host = creature(&mut state, PlayerId(1), "Blinked Host");
+        let old_gear = aura(&mut state, PlayerId(1), "Old Aura");
+        attach_to(&mut state, old_gear, host);
+        let blink_incarnation =
+            crate::types::identifiers::ObjectIncarnationRef::from_object(&state.objects[&host]);
+        let source_context =
+            crate::game::trigger_matchers::test_trigger_source_context(&state, host);
+        // The earlier blink's departure record stays in this turn's history.
+        state
+            .zone_changes_this_turn
+            .push_back(crate::types::game_state::ZoneChangeRecord {
+                attachments: vec![crate::types::game_state::AttachmentSnapshot {
+                    object_id: old_gear,
+                    identity: Some(
+                        crate::types::identifiers::ObjectIncarnationRef::from_object(
+                            &state.objects[&old_gear],
+                        ),
+                    ),
+                    controller: PlayerId(1),
+                    kind: crate::types::ability::AttachmentKind::Aura,
+                }],
+                trigger_source_context: Some(crate::types::game_state::TriggerSourceContext {
+                    identity: crate::types::identifiers::ObjectIdentityBinding::new(
+                        blink_incarnation,
+                        Zone::Battlefield,
+                    ),
+                    ..source_context
+                }),
+                ..crate::types::game_state::ZoneChangeRecord::test_minimal(
+                    host,
+                    Some(Zone::Battlefield),
+                    Zone::Exile,
+                )
+            });
+        // It returns as a new incarnation, loses the old Aura, gains a new one.
+        state.objects.get_mut(&host).unwrap().bump_incarnation();
+        state.objects.get_mut(&old_gear).unwrap().attached_to = None;
+        let current =
+            crate::types::identifiers::ObjectIncarnationRef::from_object(&state.objects[&host]);
+        let new_gear = aura(&mut state, PlayerId(1), "New Aura");
+        attach_to(&mut state, new_gear, host);
+        state.current_trigger_event = Some(GameEvent::AttackersDeclared {
+            attacker_ids: vec![host],
+            defending_player: PlayerId(0),
+            attacks: vec![],
+            declaration_records: vec![crate::types::game_state::AttackDeclarationRecord {
+                object_id: host,
+                incarnation: Some(current.incarnation),
+                lki: empty_lki(),
+                is_token: false,
+                is_commander: false,
+            }],
+        });
+
+        let ability = ability(destroyed(), vec![]);
+        let filter = host_filter(TargetFilter::TriggeringSource);
+        assert!(
+            matches_target_filter(
+                &state,
+                new_gear,
+                &filter,
+                &FilterContext::from_ability(&ability)
+            ),
+            "the live incarnation's Equipment answers"
+        );
+        assert!(
+            !matches_target_filter(
+                &state,
+                old_gear,
+                &filter,
+                &FilterContext::from_ability(&ability)
+            ),
+            "the earlier exit's attachment set must not answer"
         );
     }
 
