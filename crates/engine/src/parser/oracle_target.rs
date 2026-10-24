@@ -9119,7 +9119,7 @@ pub(crate) fn parse_bare_was_dealt_damage_suffix(text: &str) -> Option<(FilterPr
 ///
 /// Handles multiple pattern classes:
 /// - "that share(s) [a] [quality]" → `SharesQuality`
-/// - CR 201.2a + CR 201.2c: "that doesn't have the same name as <reference>" →
+/// - CR 201.2a: "that doesn't have the same name as <reference>" →
 ///   negated name `SharesQuality` (the affirmative frame is refused)
 /// - CR 120.6 + CR 120.9: "that was dealt damage this turn" → `WasDealtDamageThisTurn`
 /// - CR 400.7: "that entered (the battlefield) this turn" → `EnteredThisTurn`
@@ -9193,11 +9193,14 @@ pub(crate) fn parse_that_clause_suffix<'a>(
     //
     // CR 201.2a is the AUTHORIZING rule for this negation: "An object with no
     // name doesn't have the same name as any other object, including another
-    // object with no name." The predicate is therefore the LITERAL negation of
-    // `SharesQuality { Shares }` — `FilterProp::Not` — so a nameless candidate
-    // (a face-down creature, CR 708.2a) satisfies it. `DoesNotShare` is the
-    // CR 201.2c "different name" relation and gives the opposite answer for a
-    // nameless object, so it must not be reused here.
+    // object with no name." The predicate is composed as `FilterProp::Not`
+    // around the positive `SharesQuality { Shares }` — the literal shape of the
+    // printed predicate — so a nameless candidate (a face-down creature,
+    // CR 708.2a) satisfies it. The sibling "doesn't share a name with" grammar
+    // (`parse_shared_quality_clause`) still uses
+    // `SharedQualityRelation::DoesNotShare`; CR 201.2c's "different name"
+    // predicate is `FilterProp::DifferentNameFrom`, which this clause must not
+    // use.
     //
     // The relativizer is required: this arm lives in the relative-clause
     // cascade, and the shared authority also accepts a bare predicate frame
@@ -21249,8 +21252,9 @@ mod tests {
     /// relative-clause authority delegates the relation x verb product and the
     /// reference-axis grammar to `oracle_effect::search`; this arm keeps the
     /// relative-clause frame and emits the LITERAL negation of a same-name
-    /// comparison (`Not { Shares }`, CR 201.2a), never the CR 201.2c different-
-    /// name relation.
+    /// comparison (`Not { Shares }`, CR 201.2a). CR 201.2c's "different name"
+    /// predicate (`FilterProp::DifferentNameFrom`) is a different relation and
+    /// is not used here.
     ///
     /// The reference population is "another permanent you control" — every
     /// permanent the controller controls except the compared object itself
@@ -21302,7 +21306,7 @@ mod tests {
         );
     }
 
-    /// CR 201.2a + CR 201.2c: the same negated relation with a TOKEN reference —
+    /// CR 201.2a: the same negated relation with a TOKEN reference —
     /// The Apprentice's Folly: "Choose target nontoken creature you control
     /// that doesn't have the same name as a token you control." `Token` is a
     /// `FilterProp`, not a `TypeFilter`, so the reference type list is empty.

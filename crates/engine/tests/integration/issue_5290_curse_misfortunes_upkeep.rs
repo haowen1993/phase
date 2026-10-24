@@ -314,7 +314,7 @@ fn lynde_and_misfortunes_both_trigger_on_controller_upkeep() {
 // ─────────────────────────────────────────────────────────────────────────
 // Issue #10143 — the NEGATED name comparison in Misfortunes' SEARCH filter:
 // "search your library for a Curse card that doesn't have the same name as a
-// Curse attached to enchanted player". CR 201.2a + CR 201.2c define the
+// Curse attached to enchanted player". CR 201.2a defines the
 // comparison, CR 303.4b/303.4m the "enchanted player" referent, CR 109.2 the
 // battlefield default for the reference population, and CR 701.23b the partial
 // find a stated-quality search allows.

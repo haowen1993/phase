@@ -1,4 +1,4 @@
-//! CR 201.2a + CR 201.2c: the printed name-comparison relative clause
+//! CR 201.2a: the printed name-comparison relative clause
 //! `<filter> that (doesn't|does not|don't|do not) (have|has) the same name as
 //! <reference>` in target/search filter positions.
 //!
@@ -261,9 +261,10 @@ fn apprentices_folly_chapter_target_excludes_only_your_token_names() {
 /// CR 201.2a + CR 708.2a: "doesn't have the same name as" is the literal
 /// negation of same-name. A face-down creature has no name ("no text, no name,
 /// no subtypes, and no mana cost"), so it does not have the same name as any
-/// token its controller controls and remains a legal Folly target. This is the
-/// rule that distinguishes the negation from CR 201.2c's "different name"
-/// relation, whose nameless answer is the opposite.
+/// token its controller controls and remains a legal Folly target even when the
+/// reference population is non-empty. The named nontoken `Alpha` beside a token
+/// `Alpha` is illegal and proves the comparison is actually being evaluated;
+/// dropping the clause would make it legal too.
 #[test]
 fn apprentices_folly_chapter_target_accepts_a_nameless_face_down_creature() {
     let mut scenario = GameScenario::new();
@@ -276,10 +277,14 @@ fn apprentices_folly_chapter_target_accepts_a_nameless_face_down_creature() {
         .from_oracle_text(FOLLY)
         .id();
 
+    // Reference population: a token named Alpha. The nontoken Alpha therefore
+    // shares a name with a token you control and must be excluded.
+    let alpha_token = scenario.add_creature(P0, "Alpha", 2, 2).id();
+    let alpha_nontoken = scenario.add_creature(P0, "Alpha", 2, 2).id();
     let hidden = scenario.add_creature(P0, "Hidden", 2, 2).id();
     // A second legal target keeps the forced-unique auto-announcement (CR
     // 601.2c) from hiding the prompt this test reads.
-    scenario.add_creature(P0, "Zeta", 2, 2);
+    let zeta = scenario.add_creature(P0, "Zeta", 2, 2).id();
 
     let filler = ["Plains"; 10];
     scenario.with_library_top(P0, &filler);
@@ -288,6 +293,7 @@ fn apprentices_folly_chapter_target_accepts_a_nameless_face_down_creature() {
     let mut runner = scenario.build();
     {
         let state = runner.state_mut();
+        state.objects.get_mut(&alpha_token).unwrap().is_token = true;
         apply_face_down_creature_characteristics(
             state.objects.get_mut(&hidden).unwrap(),
             &FaceDownProfile::vanilla_2_2(),
@@ -304,21 +310,29 @@ fn apprentices_folly_chapter_target_accepts_a_nameless_face_down_creature() {
         "",
         "reach guard: the face-down creature is nameless"
     );
+    assert!(
+        runner.state().objects[&alpha_token].is_token,
+        "reach guard: the reference token is a token"
+    );
 
     let legal = reach_chapter_target_selection(&mut runner, saga);
-    let legal_ids: Vec<ObjectId> = legal
+    let mut legal_ids: Vec<ObjectId> = legal
         .iter()
         .map(|target| match target {
             TargetRef::Object(id) => *id,
             other => panic!("expected object targets, got {other:?}"),
         })
         .collect();
-    assert!(
-        legal_ids.contains(&hidden),
-        "a nameless face-down creature satisfies \"doesn't have the same name as\" (CR 201.2a), got {legal_ids:?}"
+    legal_ids.sort();
+    let mut expected = vec![hidden, zeta];
+    expected.sort();
+    assert_eq!(
+        legal_ids, expected,
+        "the nameless face-down creature is legal (CR 201.2a), the same-named nontoken Alpha is not, \
+         and the token itself is excluded by the nontoken filter"
     );
     assert!(
-        legal_ids.len() >= 2,
-        "the target prompt must remain observable, got {legal_ids:?}"
+        !legal_ids.contains(&alpha_nontoken),
+        "the named nontoken Alpha shares a name with a token you control (CR 201.2a)"
     );
 }

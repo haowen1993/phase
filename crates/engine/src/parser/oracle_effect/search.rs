@@ -1860,7 +1860,7 @@ fn single_search_type_filter(filter: TargetFilter) -> Option<TypeFilter> {
     }
 }
 
-/// CR 201.2a + CR 201.2c: the verb-and-negation core of a same-name comparison,
+/// CR 201.2a: the verb-and-negation core of a same-name comparison,
 /// with any leading determiner already consumed by the caller.
 ///
 /// Composed as two independent axes rather than enumerated as whole phrases, so
@@ -1898,7 +1898,7 @@ fn parse_name_relation_body(
     ))
 }
 
-/// CR 201.2a + CR 201.2c: parse one same-name frame and its reference
+/// CR 201.2a: parse one same-name frame and its reference
 /// population into [`FilterProp::SharesQuality`].
 ///
 /// Three entry frames share this authority: the relative-clause frame
@@ -2184,18 +2184,24 @@ fn object_scope_for_linked_reference(reference: &TargetFilter) -> Option<ObjectS
 }
 
 fn last_shared_quality_reference_in_filter(filter: &TargetFilter) -> Option<TargetFilter> {
-    match filter {
-        TargetFilter::Typed(typed) => typed.properties.iter().rev().find_map(|property| {
-            if let FilterProp::SharesQuality {
+    fn reference_of(property: &FilterProp) -> Option<TargetFilter> {
+        match property {
+            FilterProp::SharesQuality {
                 reference: Some(reference),
                 ..
-            } = property
-            {
-                Some(reference.as_ref().clone())
-            } else {
-                None
-            }
-        }),
+            } => Some(reference.as_ref().clone()),
+            // CR 201.2a: the negated same-name arm composes `Not` around the
+            // positive comparison; the linked-reference suffix must still find
+            // the population inside it. `AnyOf` mirrors the other consumers that
+            // recurse through composite props.
+            FilterProp::Not { prop } => reference_of(prop),
+            FilterProp::AnyOf { props } => props.iter().rev().find_map(reference_of),
+            _ => None,
+        }
+    }
+
+    match filter {
+        TargetFilter::Typed(typed) => typed.properties.iter().rev().find_map(reference_of),
         TargetFilter::And { filters } | TargetFilter::Or { filters } => filters
             .iter()
             .rev()
@@ -4321,7 +4327,7 @@ mod tests {
 
     #[test]
     fn parse_search_filter_curse_card_name_reference_with_enchanted_player() {
-        // CR 201.2a + CR 201.2c + CR 303.4b + CR 303.4m: Curse of Misfortunes'
+        // CR 201.2a + CR 303.4b + CR 303.4m: Curse of Misfortunes'
         // search filter — "a Curse card that doesn't have the same name as a
         // Curse attached to enchanted player". The negated name relation is
         // consumed by the shared name authority through the type phrase as the
