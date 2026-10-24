@@ -17334,6 +17334,30 @@ have been revealed, Aggressive Detective deals 2 damage to each opponent.";
         assert!(obj.has_unimplemented_mechanics());
     }
 
+    /// CR 603.10a + CR 704.5n: Rhuk's deferred dies leg must surface as an
+    /// engine-visible gap, not as a silently supported ordinary Attach — the
+    /// coverage authority reads the trigger's effect, never the PR prose.
+    #[test]
+    fn rhuk_dies_leg_reports_the_departure_attachment_gap() {
+        let parsed = crate::parser::oracle::parse_oracle_text(
+            "Trample, haste\nWhenever an equipped creature you control other than Rhuk attacks or dies, you may attach all Equipment attached to that creature to Rhuk.",
+            "Rhuk, Hexgold Nabber",
+            &["Trample".to_string(), "Haste".to_string()],
+            &["Legendary".to_string()],
+            &["Creature".to_string()],
+        );
+        let mut face = make_face();
+        face.name = "Rhuk, Hexgold Nabber".to_string();
+        face.abilities = parsed.abilities;
+        face.triggers = parsed.triggers;
+        let gaps = super::card_face_gaps(&face);
+        assert!(
+            gaps.iter()
+                .any(|gap| gap.contains("departure_attachment_relation")),
+            "the deferred dies leg must be an engine-visible gap: {gaps:?}"
+        );
+    }
+
     fn make_face() -> CardFace {
         CardFace {
             name: "Test Card".to_string(),

@@ -2203,6 +2203,35 @@ pub(crate) fn lower_trigger_node_ir(ir: &TriggerNodeIr) -> TriggerDefinition {
     }
 }
 
+/// CR 603.10a + CR 704.5n: whether this trigger reads the attachment relation of
+/// an object that has already left the battlefield ("equipped/enchanted creature
+/// dies"). The CR 704.5m/n SBAs detach those permanents before the look-back, and
+/// the departure path does not yet queue such triggers — so the clause is
+/// reported as an engine gap instead of a silent no-op.
+fn trigger_depends_on_departure_attachment_relation(def: &TriggerDefinition) -> bool {
+    matches!(def.mode, TriggerMode::ChangesZone)
+        && def.origin == Some(Zone::Battlefield)
+        && def
+            .valid_card
+            .as_ref()
+            .is_some_and(filter_uses_departure_attachment_prop)
+}
+
+fn filter_uses_departure_attachment_prop(filter: &TargetFilter) -> bool {
+    match filter {
+        TargetFilter::Typed(typed) => typed.properties.iter().any(|prop| match prop {
+            FilterProp::EquippedBy | FilterProp::EnchantedBy => true,
+            FilterProp::AttachedTo { .. } | FilterProp::Not { .. } => false,
+            _ => false,
+        }),
+        TargetFilter::Or { filters } | TargetFilter::And { filters } => {
+            filters.iter().any(filter_uses_departure_attachment_prop)
+        }
+        TargetFilter::Not { filter } => filter_uses_departure_attachment_prop(filter),
+        _ => false,
+    }
+}
+
 pub(crate) fn lower_trigger_ir(ir: &TriggerIr) -> TriggerDefinition {
     let mut def = ir.partial_def.clone();
     let modifiers = &ir.modifiers;
@@ -2427,6 +2456,21 @@ pub(crate) fn lower_trigger_ir(ir: &TriggerIr) -> TriggerDefinition {
     // CR 101.1 + CR 608.2b: root only — resolve_top reads the stack entry's root.
     if let Some(ability) = execute.as_deref_mut() {
         ability.illegal_targets_disposition = modifiers.illegal_targets_disposition;
+    }
+    // CR 603.10a: a leaves-the-battlefield trigger whose subject filter needs the
+    // departure attachment relation ("whenever an equipped/enchanted creature
+    // dies") is not supported end to end — the record captures the relation, but
+    // the death trigger does not queue it, so the instruction would silently do
+    // nothing. Mark the clause with the generic unsupported effect (never a
+    // card-name special case) so coverage reports the honest gap.
+    if trigger_depends_on_departure_attachment_relation(&def) {
+        execute = Some(Box::new(AbilityDefinition::new(
+            AbilityKind::Spell,
+            Effect::unimplemented(
+                "departure_attachment_relation",
+                def.description.clone().unwrap_or_default(),
+            ),
+        )));
     }
     def.execute = execute;
     def.optional = modifiers.optional;
