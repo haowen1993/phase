@@ -6019,13 +6019,48 @@ pub(crate) fn matches_target_filter_on_departure(
     from: Zone,
     filter: &TargetFilter,
     ctx: &FilterContext<'_>,
+    record: Option<&ZoneChangeRecord>,
 ) -> bool {
-    filter_inner_with_lookup(
+    // CR 603.10a + CR 704.5n: by the time a leaves-the-battlefield trigger is
+    // matched, the CR 704.5m/n SBAs have already detached the object's Auras and
+    // Equipment, so the live object's `attachments` is empty. The departure
+    // record captured the relation at the instant before the zone change; read
+    // THAT snapshot for attachment predicates.
+    let Some(obj) = state.objects.get(&object_id) else {
+        return false;
+    };
+    let projected = record.filter(|record| !record.attachments.is_empty());
+    let Some(record) = projected else {
+        return filter_inner_with_lookup(
+            state,
+            object_id,
+            filter,
+            ctx,
+            ControllerLookup::Departed(from),
+        );
+    };
+    let mut departed = obj.clone();
+    departed.attachments = record
+        .attachments
+        .iter()
+        .map(|attachment| attachment.object_id)
+        .collect();
+    filter_inner_for_object(
         state,
+        &departed,
         object_id,
         filter,
-        ctx,
+        ctx.source_id,
+        ctx.source_controller,
+        ctx.ability,
+        ctx.trigger_source,
+        ctx.recipient_id,
+        ctx.scoped_iteration_player,
+        ctx.triggering_object,
+        ctx.declared_slot_view,
+        ctx.granting_object,
         ControllerLookup::Departed(from),
+        HeldObject::Live,
     )
 }
 
@@ -7966,7 +8001,7 @@ pub fn matches_zone_change_event_object_filter(
             // format modifies it).
             match origin {
                 Some(from) => {
-                    matches_target_filter_on_departure(state, *object_id, from, filter, ctx)
+                    matches_target_filter_on_departure(state, *object_id, from, filter, ctx, None)
                 }
                 None => matches_target_filter(state, *object_id, filter, ctx),
             }
@@ -12429,12 +12464,32 @@ fn zone_change_record_matches_property(
                     .contains(&record.object_id)
         }
 
+        // CR 603.10a + CR 704.5n: the departure record captures the attachment
+        // relation at the instant before the zone change, so an "equipped" /
+        // "enchanted" look-back reads THAT snapshot — the live object has already
+        // had its illegally attached permanents detached by the SBAs. The
+        // source-relative half follows the live arm: a source that is itself an
+        // attachment (or attached) can only name its own host, which a departed
+        // record is not.
+        FilterProp::EnchantedBy => {
+            source.attached_to.is_none()
+                && !source.source_is_aura
+                && record
+                    .attachments
+                    .iter()
+                    .any(|attachment| attachment.kind == crate::types::ability::AttachmentKind::Aura)
+        }
+        FilterProp::EquippedBy => {
+            source.attached_to.is_none()
+                && !source.source_is_equipment
+                && record.attachments.iter().any(|attachment| {
+                    attachment.kind == crate::types::ability::AttachmentKind::Equipment
+                })
+        }
         FilterProp::SaddledSource
         | FilterProp::ConvokedSource
         | FilterProp::ProtectorMatches { .. }
         | FilterProp::HasHasteOrControlledSinceTurnBegan
-        | FilterProp::EnchantedBy
-        | FilterProp::EquippedBy
         | FilterProp::AttachedTo { to: AttachmentReferent::Source }
         | FilterProp::AttachedTo { to: AttachmentReferent::Recipient }
         | FilterProp::AttachedTo { to: AttachmentReferent::Player { .. } }
@@ -26490,7 +26545,7 @@ mod dandan_axis_collapse_tests {
     ) -> [bool; 2] {
         [P0, P1].map(|seat| {
             let ctx = FilterContext::from_source_with_controller(SOURCE, seat);
-            matches_target_filter_on_departure(state, id, from, filter, &ctx)
+            matches_target_filter_on_departure(state, id, from, filter, &ctx, None)
         })
     }
 

@@ -769,6 +769,100 @@ fn r13_rhuk_attaches_the_triggering_creatures_equipment_to_itself() {
     );
 }
 
+/// R13(c) (CR 400.7 + CR 608.2h): the production prior-blink discriminator. A
+/// blink leaves an earlier exit for the bearer's storage id; the returned
+/// incarnation then gains DIFFERENT Equipment and attacks. Rhuk's trigger names
+/// the CURRENT incarnation, so its current Equipment moves — the earlier exit's
+/// attachment set must not answer.
+#[test]
+fn r13c_rhuk_attack_after_a_prior_blink_moves_the_current_equipment() {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::BeginCombat);
+    let rhuk = scenario
+        .add_creature_from_oracle(P0, "Rhuk, Hexgold Nabber", 2, 2, RHUK)
+        .id();
+    let bearer = scenario
+        .add_creature_from_oracle(P0, "Raging Goblin", 1, 1, "Haste")
+        .id();
+    let old_gear = equipment(&mut scenario, P0, "Old Equipment");
+    let new_gear = scenario
+        .add_artifact_from_oracle(
+            P0,
+            "New Equipment",
+            "{0}: Attach this Equipment to target creature you control. Equipped creature gets +2/+0.",
+        )
+        .with_subtypes(vec!["Equipment"])
+        .id();
+    let blink = free_spell(
+        &mut scenario,
+        "Cloudshift",
+        true,
+        "Exile target creature you control, then return that card to the battlefield under its owner's control.",
+    );
+    let mut runner = scenario.build();
+    attach_at(&mut runner, old_gear, bearer);
+
+    // A real blink: the bearer leaves and returns as a new incarnation.
+    runner.cast(blink).target_object(bearer).resolve();
+    assert_eq!(
+        runner.state().objects[&bearer].zone,
+        Zone::Battlefield,
+        "reach guard: the bearer returned"
+    );
+    assert_eq!(
+        runner.state().objects[&old_gear].attached_to,
+        None,
+        "reach guard: the blink tore the old attachment down"
+    );
+
+    // Attach DIFFERENT Equipment to the returned incarnation.
+    runner.activate(new_gear, 0).target_object(bearer).resolve();
+    assert_eq!(
+        runner.state().objects[&new_gear].attached_to,
+        Some(AttachTarget::Object(bearer)),
+        "reach guard: the returned bearer gained the new Equipment"
+    );
+
+    runner
+        .declare_attackers(&[(bearer, engine::game::combat::AttackTarget::Player(P1))])
+        .expect("declare the equipped attacker");
+
+    let mut optional_prompts = 0;
+    for _ in 0..64 {
+        match runner.state().waiting_for.clone() {
+            WaitingFor::OptionalEffectChoice { .. } => {
+                optional_prompts += 1;
+                runner
+                    .act(GameAction::DecideOptionalEffect { accept: true })
+                    .expect("accept the attach");
+            }
+            WaitingFor::OrderTriggers { triggers, .. } => {
+                let order: Vec<usize> = (0..triggers.len()).collect();
+                let _ = runner.act(GameAction::OrderTriggers { order });
+            }
+            WaitingFor::Priority { .. } if runner.state().stack.is_empty() => break,
+            WaitingFor::Priority { .. } => {
+                runner.act(GameAction::PassPriority).expect("pass priority");
+            }
+            other => panic!("unexpected prompt while resolving Rhuk's attack trigger: {other:?}"),
+        }
+    }
+    assert_eq!(
+        optional_prompts, 1,
+        "reach guard: the attack trigger fired and offered its optional attach"
+    );
+    let state = runner.state();
+    assert_eq!(
+        state.objects[&new_gear].attached_to,
+        Some(AttachTarget::Object(rhuk)),
+        "the CURRENT incarnation's Equipment moves to Rhuk"
+    );
+    assert_eq!(
+        state.objects[&old_gear].attached_to, None,
+        "the earlier exit's Equipment is untouched"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // R14: Murderous Spoils — D2 gain control of the departed host's Equipment
 // ---------------------------------------------------------------------------

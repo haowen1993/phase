@@ -85014,6 +85014,39 @@ fn p4_end_hostilities_lowers_to_or_of_primary_and_host_attached() {
     );
 }
 
+/// P5(b): Rhuk's "attacks or dies" must lower to BOTH a `Attacks` leg and a
+/// `ChangesZone` (dies) leg, each carrying the equipped-creature valid-card
+/// filter. Prints the parsed modes for the record.
+#[test]
+fn p5b_rhuk_parses_attack_and_dies_legs() {
+    let text = "Trample, haste\nWhenever an equipped creature you control other than Rhuk attacks or dies, you may attach all Equipment attached to that creature to Rhuk.";
+    let parsed = parse_oracle_text(
+        text,
+        "Rhuk, Hexgold Nabber",
+        &["Trample".to_string(), "Haste".to_string()],
+        &["Legendary".to_string()],
+        &attached_set_type_list("Creature"),
+    );
+    for trigger in &parsed.triggers {
+        eprintln!(
+            "mode={:?} valid_card={:?} valid_target={:?}",
+            trigger.mode, trigger.valid_card, trigger.valid_target
+        );
+    }
+    assert!(
+        parsed
+            .triggers
+            .iter()
+            .any(|trigger| trigger.mode == crate::types::triggers::TriggerMode::ChangesZone),
+        "the dies leg must be present as a ChangesZone trigger: {:?}",
+        parsed
+            .triggers
+            .iter()
+            .map(|t| t.mode.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
 /// P5: family D — Rhuk attaches every Equipment attached to the triggering
 /// creature to itself (`Host{TriggeringSource}`, not `ParentTarget`).
 #[test]
