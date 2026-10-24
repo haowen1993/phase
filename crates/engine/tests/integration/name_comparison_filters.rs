@@ -22,9 +22,10 @@
 //! sharing a name with a token you control was offered as a legal target.
 
 use engine::game::keywords::has_keyword;
+use engine::game::morph::apply_face_down_creature_characteristics;
 use engine::game::scenario::{GameRunner, GameScenario, P0, P1};
 use engine::game::triggers::drain_order_triggers_with_identity;
-use engine::types::ability::TargetRef;
+use engine::types::ability::{FaceDownProfile, TargetRef};
 use engine::types::actions::GameAction;
 use engine::types::card_type::Supertype;
 use engine::types::counter::CounterType;
@@ -255,4 +256,69 @@ fn apprentices_folly_chapter_target_excludes_only_your_token_names() {
         copy.card_types.subtypes
     );
     assert!(has_keyword(copy, &Keyword::Haste), "the copy has haste");
+}
+
+/// CR 201.2a + CR 708.2a: "doesn't have the same name as" is the literal
+/// negation of same-name. A face-down creature has no name ("no text, no name,
+/// no subtypes, and no mana cost"), so it does not have the same name as any
+/// token its controller controls and remains a legal Folly target. This is the
+/// rule that distinguishes the negation from CR 201.2c's "different name"
+/// relation, whose nameless answer is the opposite.
+#[test]
+fn apprentices_folly_chapter_target_accepts_a_nameless_face_down_creature() {
+    let mut scenario = GameScenario::new();
+    scenario.at_phase(Phase::PreCombatMain);
+
+    let saga = scenario
+        .add_creature(P0, "The Apprentice's Folly", 0, 0)
+        .as_enchantment()
+        .with_subtypes(vec!["Saga"])
+        .from_oracle_text(FOLLY)
+        .id();
+
+    let hidden = scenario.add_creature(P0, "Hidden", 2, 2).id();
+    // A second legal target keeps the forced-unique auto-announcement (CR
+    // 601.2c) from hiding the prompt this test reads.
+    scenario.add_creature(P0, "Zeta", 2, 2);
+
+    let filler = ["Plains"; 10];
+    scenario.with_library_top(P0, &filler);
+    scenario.with_library_top(P1, &filler);
+
+    let mut runner = scenario.build();
+    {
+        let state = runner.state_mut();
+        apply_face_down_creature_characteristics(
+            state.objects.get_mut(&hidden).unwrap(),
+            &FaceDownProfile::vanilla_2_2(),
+        );
+        state
+            .objects
+            .get_mut(&saga)
+            .unwrap()
+            .counters
+            .insert(CounterType::Lore, 0);
+    }
+    assert_eq!(
+        runner.state().objects[&hidden].name,
+        "",
+        "reach guard: the face-down creature is nameless"
+    );
+
+    let legal = reach_chapter_target_selection(&mut runner, saga);
+    let legal_ids: Vec<ObjectId> = legal
+        .iter()
+        .map(|target| match target {
+            TargetRef::Object(id) => *id,
+            other => panic!("expected object targets, got {other:?}"),
+        })
+        .collect();
+    assert!(
+        legal_ids.contains(&hidden),
+        "a nameless face-down creature satisfies \"doesn't have the same name as\" (CR 201.2a), got {legal_ids:?}"
+    );
+    assert!(
+        legal_ids.len() >= 2,
+        "the target prompt must remain observable, got {legal_ids:?}"
+    );
 }

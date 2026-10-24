@@ -3546,16 +3546,17 @@ mod tests {
     #[test]
     fn normalize_curse_attachment_qualifier_keeps_subtype_literal() {
         // Two occurrences of the same subtype-word short name in one text: the
-        // subject occurrence ("a Curse is put …") IS the card referring to
-        // itself and normalizes to `~`, while the attachment-qualified type
-        // reference ("a Curse attached to enchanted player") must stay literal.
-        // This isolates the `precedes_attachment_qualifier` guard: without it
-        // the second occurrence folds to `~` like the first.
-        let text = "Whenever a Curse is put into a graveyard from the battlefield, you may attach it to a Curse attached to enchanted player.";
+        // subject occurrence ("Curse is put …" — no article, the CR 201.5c
+        // shortened-name self-reference) normalizes to `~`, while the
+        // attachment-qualified type reference ("a Curse attached to enchanted
+        // player") must stay literal. This isolates the
+        // `precedes_attachment_qualifier` guard: without it the second
+        // occurrence folds to `~` like the first.
+        let text = "Whenever Curse is put into a graveyard from the battlefield, you may attach it to a Curse attached to enchanted player.";
         let normalized = normalize_card_name_refs(text, "Curse of Misfortunes");
         assert_eq!(
             normalized,
-            "Whenever a ~ is put into a graveyard from the battlefield, you may attach it to a Curse attached to enchanted player."
+            "Whenever ~ is put into a graveyard from the battlefield, you may attach it to a Curse attached to enchanted player."
         );
     }
 
@@ -4320,19 +4321,20 @@ mod tests {
 
     #[test]
     fn normalize_of_short_name_normalizes_subtype_outside_type_reference() {
-        // CR 201.5 + CR 201.5c: the same subtype-word short name DOES normalize when the
-        // occurrence is a genuine subject reference ("Whenever a Curse is put
-        // into a graveyard …" = this card). Paired with
+        // CR 201.5 + CR 201.5c: the same subtype-word short name DOES normalize
+        // when the occurrence is a genuine subject reference ("Curse is put into
+        // a graveyard …" — no article, the shortened-name self-reference).
+        // Paired with
         // `normalize_of_short_name_curse_of_misfortunes_keeps_type_references_literal`,
         // this proves the type-reference guards narrow the replacement rather
         // than disabling the of-short-name strategy for subtype names.
         let normalized = normalize_card_name_refs(
-            "Whenever a Curse is put into a graveyard from the battlefield, return it to the battlefield attached to you at the beginning of the next end step.",
+            "Whenever Curse is put into a graveyard from the battlefield, return it to the battlefield attached to you at the beginning of the next end step.",
             "Curse of Misfortunes",
         );
         assert_eq!(
             normalized,
-            "Whenever a ~ is put into a graveyard from the battlefield, return it to the battlefield attached to you at the beginning of the next end step."
+            "Whenever ~ is put into a graveyard from the battlefield, return it to the battlefield attached to you at the beginning of the next end step."
         );
     }
 

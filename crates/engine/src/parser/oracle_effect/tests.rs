@@ -17882,60 +17882,13 @@ fn parse_search_aura_with_mana_value_and_different_name() {
     }
 }
 
-/// CR 201.2a: Herald of Vengeance — "When Herald of Vengeance
-/// enters the battlefield, destroy each permanent you don't control that has
-/// the same name as a permanent that dealt damage to you last turn."
-///
-/// The AFFIRMATIVE frame belongs to the trigger / spell-qualifier grammar, not
-/// to filter positions: in a filter a `Shares` name comparison is self-satisfied
-/// by the compared object, so accepting it would turn the destroy filter into a
-/// population with no name constraint at all. The shared name authority's typed
-/// gate refuses it, so the clause stays swallowed exactly as it is at base. This
-/// test PINS that pre-existing swallow — it does not claim the swallow is
-/// correct — so this change cannot silently convert Herald into a vacuous prop.
-#[test]
-fn herald_of_vengeance_affirmative_name_clause_stays_out_of_the_destroy_filter() {
-    const HERALD: &str = "Flying\nWhen Herald of Vengeance enters the battlefield, destroy each permanent you don't control that has the same name as a permanent that dealt damage to you last turn.";
-    let parsed = parse_oracle_text(
-        HERALD,
-        "Herald of Vengeance",
-        &[],
-        &["Creature".to_string()],
-        &["Angel".to_string()],
-    );
-    assert_eq!(
-        parsed.triggers.len(),
-        1,
-        "the enters trigger must parse (reach guard), got {parsed:#?}"
-    );
-    let effect = parsed.triggers[0]
-        .execute
-        .as_ref()
-        .expect("the enters trigger must lower an effect")
-        .effect
-        .as_ref();
-    let Effect::DestroyAll { target, .. } = effect else {
-        panic!("expected DestroyAll, got {effect:?}");
-    };
-    let TargetFilter::Typed(tf) = target else {
-        panic!("expected a Typed destroy filter, got {target:?}");
-    };
-    assert_eq!(
-        tf.type_filters,
-        vec![TypeFilter::Permanent],
-        "the destroy filter reads the permanent population"
-    );
-    assert_eq!(
-        tf.controller,
-        Some(ControllerRef::Opponent),
-        "\"you don't control\" narrows the population to opponents' permanents"
-    );
-    assert!(
-        tf.properties.is_empty(),
-        "the affirmative name clause must stay out of the filter, got {:?}",
-        tf.properties
-    );
-}
+// Herald of Vengeance's affirmative filter-position name clause ("… that has
+// the same name as a permanent that dealt damage to you last turn") remains an
+// unsupported history-predicate gap; issue #10280 tracks it. The arm
+// deliberately refuses the affirmative frame, and
+// `parse_that_clause_suffix_refuses_affirmative_name_clause` pins that scoping
+// at the seam, so no full-card test records the swallowed restriction as
+// expected behavior.
 
 #[test]
 fn effect_create_colored_token() {

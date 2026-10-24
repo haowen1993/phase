@@ -8596,7 +8596,7 @@ pub(crate) fn parse_shared_quality(
     .parse(input)
 }
 
-fn parse_shared_quality_reference<'a>(
+pub(crate) fn parse_shared_quality_reference<'a>(
     input: &'a str,
     ctx: &ParseContext,
 ) -> nom::IResult<&'a str, TargetFilter, OracleError<'a>> {
@@ -9183,35 +9183,53 @@ pub(crate) fn parse_that_clause_suffix<'a>(
         return Some((vec![prop], leading_ws + consumed));
     }
 
-    // CR 201.2a + CR 201.2c: "<filter> that doesn't have the same name as
-    // <reference>" — the NEGATED name relation in a filter position (Curse of
-    // Misfortunes, Yenna Redtooth Regent, The Apprentice's Folly). The relation
-    // x verb product and the reference-axis grammar are delegated to the single
-    // authority in `oracle_effect::search`; this arm contributes only the
-    // filter-position frame and the class scope, so every caller of
-    // `parse_that_clause_suffix` (type-phrase target/search filters, the
-    // `except those that` complement leg, spell-qualifier and static readers)
-    // sees the same typed value.
+    // CR 201.2a: "<filter> that (doesn't|does not|don't|do not) have/has the
+    // same name as <reference>" — the negated same-name relation in a filter
+    // position (Curse of Misfortunes, Yenna Redtooth Regent, The Apprentice's
+    // Folly). The relation x verb product and the reference-axis grammar are
+    // delegated to the single authority in `oracle_effect::search`; this arm
+    // contributes the relative-clause frame, the caller's parse context, and the
+    // rule-correct filter shape.
     //
-    // CR 201.2a: the AFFIRMATIVE frame "<filter> that has/have the same name as
-    // <reference>" is NOT this class. In a filter a `Shares` name comparison is
-    // self-satisfied by the compared object, i.e. a constraint that can never
-    // fail; the affirmative grammar belongs to trigger / spell-qualifier
-    // positions (Pyromancer Ascension's post-spell modifier) which parse it on
-    // their own paths. The typed gate below refuses anything whose relation is
-    // not `DoesNotShare`, so Herald of Vengeance's destroy filter keeps its
-    // existing parse instead of gaining a vacuous prop.
-    if let Ok((rest, prop)) = parse_search_name_reference_suffix(trimmed) {
-        if matches!(
-            &prop,
+    // CR 201.2a is the AUTHORIZING rule for this negation: "An object with no
+    // name doesn't have the same name as any other object, including another
+    // object with no name." The predicate is therefore the LITERAL negation of
+    // `SharesQuality { Shares }` — `FilterProp::Not` — so a nameless candidate
+    // (a face-down creature, CR 708.2a) satisfies it. `DoesNotShare` is the
+    // CR 201.2c "different name" relation and gives the opposite answer for a
+    // nameless object, so it must not be reused here.
+    //
+    // The relativizer is required: this arm lives in the relative-clause
+    // cascade, and the shared authority also accepts a bare predicate frame
+    // (used by trigger conditions). Without the `that ` gate a finite
+    // predicate would fold into a noun-phrase filter that does not own it.
+    //
+    // The AFFIRMATIVE frame "<filter> that has/have the same name as
+    // <reference>" is NOT this class; its filter-position shape (Herald of
+    // Vengeance's "a permanent that dealt damage to you last turn" reference) is
+    // a separately tracked history-predicate gap, so this arm refuses `Shares`.
+    match parse_search_name_reference_suffix(trimmed, Some(ctx)) {
+        Ok((
+            rest,
             FilterProp::SharesQuality {
-                relation: SharedQualityRelation::DoesNotShare,
-                ..
-            }
-        ) {
+                quality,
+                reference,
+                relation,
+            },
+        )) if tag::<_, _, OracleError<'_>>("that ").parse(trimmed).is_ok()
+            && relation == SharedQualityRelation::DoesNotShare =>
+        {
+            let prop = FilterProp::Not {
+                prop: Box::new(FilterProp::SharesQuality {
+                    quality,
+                    reference,
+                    relation: SharedQualityRelation::Shares,
+                }),
+            };
             let consumed = trimmed.len() - rest.len();
             return Some((vec![prop], leading_ws + consumed));
         }
+        _ => {}
     }
 
     let (after_that, _) = tag::<_, _, OracleError<'_>>("that ").parse(trimmed).ok()?;
@@ -21225,12 +21243,14 @@ mod tests {
         assert_eq!(tf.controller, Some(ControllerRef::You));
     }
 
-    /// CR 201.2a + CR 201.2c: the NEGATED name relation in a TARGET-filter
-    /// position — Yenna, Redtooth Regent: "Choose target enchantment you
-    /// control that doesn't have the same name as another permanent you
-    /// control." The relative-clause authority delegates the relation x verb
-    /// product and the reference-axis grammar to `oracle_effect::search` and
-    /// keeps only the results whose typed relation is `DoesNotShare`.
+    /// CR 201.2a: the NEGATED name relation in a TARGET-filter position —
+    /// Yenna, Redtooth Regent: "Choose target enchantment you control that
+    /// doesn't have the same name as another permanent you control." The
+    /// relative-clause authority delegates the relation x verb product and the
+    /// reference-axis grammar to `oracle_effect::search`; this arm keeps the
+    /// relative-clause frame and emits the LITERAL negation of a same-name
+    /// comparison (`Not { Shares }`, CR 201.2a), never the CR 201.2c different-
+    /// name relation.
     ///
     /// The reference population is "another permanent you control" — every
     /// permanent the controller controls except the compared object itself
@@ -21245,16 +21265,19 @@ mod tests {
             parse_that_clause_suffix(clause, Some(&ctx)).expect("negated name clause must parse");
         assert_eq!(consumed, clause.len(), "the whole clause must be consumed");
         assert_eq!(props.len(), 1, "expected exactly one prop, got {props:?}");
+        let FilterProp::Not { prop } = &props[0] else {
+            panic!("expected Not(SharesQuality), got {:?}", props[0]);
+        };
         let FilterProp::SharesQuality {
             quality,
             reference,
             relation,
-        } = &props[0]
+        } = &**prop
         else {
-            panic!("expected SharesQuality, got {:?}", props[0]);
+            panic!("expected SharesQuality under Not, got {prop:?}");
         };
         assert_eq!(*quality, SharedQuality::Name);
-        assert_eq!(*relation, SharedQualityRelation::DoesNotShare);
+        assert_eq!(*relation, SharedQualityRelation::Shares);
         let reference = reference.as_ref().expect("reference population");
         let TargetFilter::Typed(tf) = &**reference else {
             panic!("expected Typed reference, got {reference:?}");
@@ -21290,15 +21313,18 @@ mod tests {
         let (props, consumed) =
             parse_that_clause_suffix(clause, Some(&ctx)).expect("negated name clause must parse");
         assert_eq!(consumed, clause.len(), "the whole clause must be consumed");
+        let FilterProp::Not { prop } = &props[0] else {
+            panic!("expected Not(SharesQuality), got {props:?}");
+        };
         let FilterProp::SharesQuality {
             reference,
             relation,
             ..
-        } = &props[0]
+        } = &**prop
         else {
-            panic!("expected SharesQuality, got {props:?}");
+            panic!("expected SharesQuality under Not, got {prop:?}");
         };
-        assert_eq!(*relation, SharedQualityRelation::DoesNotShare);
+        assert_eq!(*relation, SharedQualityRelation::Shares);
         let reference = reference.as_ref().expect("reference population");
         let TargetFilter::Typed(tf) = &**reference else {
             panic!("expected Typed reference, got {reference:?}");
@@ -21324,12 +21350,13 @@ mod tests {
     }
 
     /// CR 201.2a: the AFFIRMATIVE frame is a different printed grammar and must
-    /// NOT be captured by the filter-position name arm. A filter-position
-    /// `Shares` prop is self-satisfied by the compared object (the candidate is
-    /// one of the objects the reference population would scan), so accepting it
-    /// would turn "that has the same name as …" into a constraint that can never
-    /// fail. The paired positive below proves the same entry point accepts the
-    /// negated forms, so the negative is not a vacuous "nothing parses" claim.
+    /// NOT be captured by the filter-position name arm; its filter-position
+    /// shape (Herald of Vengeance's history-predicate reference) is a separately
+    /// tracked pre-existing gap. The relative-clause frame is also required here:
+    /// a bare finite predicate belongs to the caller that owns its subject, never
+    /// to this noun-phrase cascade. The paired positives below prove the same
+    /// entry point accepts the `that`-led negated forms, so neither negative is a
+    /// vacuous "nothing parses" claim.
     #[test]
     fn parse_that_clause_suffix_refuses_affirmative_name_clause() {
         let ctx = ParseContext::default();
@@ -21343,6 +21370,16 @@ mod tests {
                 parse_that_clause_suffix(clause, Some(&ctx))
             );
         }
+        // CR 201.2a + the relative-clause frame: a bare finite predicate with no
+        // relativizer is not a postnominal noun-phrase restriction.
+        assert!(
+            parse_that_clause_suffix(
+                " doesn't have the same name as a token you control",
+                Some(&ctx)
+            )
+            .is_none(),
+            "a bare predicate must not fold into the noun-phrase filter"
+        );
         for clause in [
             " that doesn't have the same name as another permanent you control",
             " that doesn't have the same name as a token you control",
@@ -21352,6 +21389,54 @@ mod tests {
                 "the negated form must still parse: {clause}"
             );
         }
+    }
+
+    /// CR 608.2k: the filter-position name clause threads the caller's
+    /// `ParseContext` through the shared name-reference authority. A demonstrative
+    /// reference must bind exactly like the sibling "doesn't share a name with
+    /// that creature" grammar — both are the same back-reference question.
+    #[test]
+    fn parse_that_clause_suffix_negated_name_clause_threads_context() {
+        let ctx = ParseContext {
+            subject: Some(TargetFilter::Typed(
+                TypedFilter::creature().properties(vec![]),
+            )),
+            ..Default::default()
+        };
+        let (name_props, _) = parse_that_clause_suffix(
+            " that doesn't have the same name as that creature",
+            Some(&ctx),
+        )
+        .expect("the contextual negated-name clause must parse");
+        let (shared_props, _) =
+            parse_that_clause_suffix(" that doesn't share a name with that creature", Some(&ctx))
+                .expect("the sibling shared-quality clause must parse");
+        let reference_of = |props: &[FilterProp]| -> TargetFilter {
+            // The new arm emits the literal negation (`Not { Shares }`); the
+            // sibling shared-quality grammar emits the same comparison directly.
+            let prop = match props.first() {
+                Some(FilterProp::Not { prop }) => prop.as_ref(),
+                Some(prop @ FilterProp::SharesQuality { .. }) => prop,
+                other => panic!("expected a shares-quality prop, got {other:?}"),
+            };
+            match prop {
+                FilterProp::SharesQuality { reference, .. } => reference
+                    .as_deref()
+                    .cloned()
+                    .expect("the name comparison must carry its reference"),
+                other => panic!("expected SharesQuality, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            reference_of(&name_props),
+            TargetFilter::TriggeringSource,
+            "a typed trigger subject must resolve the demonstrative reference (CR 608.2k)"
+        );
+        assert_eq!(
+            reference_of(&name_props),
+            reference_of(&shared_props),
+            "both printed spellings of the same back-reference must bind the same object"
+        );
     }
 
     /// CR 201.2a: the negated name clause survives the whole target phrase and
@@ -21370,12 +21455,16 @@ mod tests {
         assert!(
             tf.properties.iter().any(|prop| matches!(
                 prop,
-                FilterProp::SharesQuality {
-                    relation: SharedQualityRelation::DoesNotShare,
-                    ..
-                }
+                FilterProp::Not { prop }
+                    if matches!(
+                        prop.as_ref(),
+                        FilterProp::SharesQuality {
+                            relation: SharedQualityRelation::Shares,
+                            ..
+                        }
+                    )
             )),
-            "expected a negated name comparison, got {:?}",
+            "expected the literal negation of a same-name comparison, got {:?}",
             tf.properties
         );
     }

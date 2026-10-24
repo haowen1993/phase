@@ -14,8 +14,8 @@ use super::super::oracle_nom::quantity as nom_quantity;
 use super::super::oracle_quantity;
 use super::super::oracle_target::{
     distribute_properties_to_or, parse_mana_value_suffix, parse_shared_quality_clause,
-    parse_target, parse_target_disjunction, parse_target_with_ctx, parse_type_phrase_folding,
-    parse_type_phrase_folding_with_ctx, parse_zone_word,
+    parse_shared_quality_reference, parse_target, parse_target_disjunction, parse_target_with_ctx,
+    parse_type_phrase_folding, parse_type_phrase_folding_with_ctx, parse_zone_word,
 };
 use super::super::oracle_util::{
     contains_possessive, infer_core_type_for_subtype, split_around, strip_after,
@@ -1898,9 +1898,25 @@ fn parse_name_relation_body(
     ))
 }
 
-pub(crate) fn parse_search_name_reference_suffix(
-    input: &str,
-) -> Result<(&str, FilterProp), nom::Err<OracleError<'_>>> {
+/// CR 201.2a + CR 201.2c: parse one same-name frame and its reference
+/// population into [`FilterProp::SharesQuality`].
+///
+/// Three entry frames share this authority: the relative-clause frame
+/// ("that (doesn't) have/share …"), the bare predicate frame ("if it …"), and
+/// the prepositional frame ("with the same name as …"). Relation and verb are
+/// two independent axes (see [`parse_name_relation_body`]), so callers select a
+/// frame and receive the typed relation rather than a string.
+///
+/// `ctx` is the caller's parse context. Filter-position callers pass the live
+/// context so a demonstrative reference ("that creature") resolves through the
+/// same contextual reference resolver as the sibling "doesn't share a name
+/// with that creature" grammar; callers with no context (the search-suffix
+/// loop, trigger conditions) pass `None` and keep the context-free reference
+/// parse. Nested target/type parsing stays on throwaway contexts either way.
+pub(crate) fn parse_search_name_reference_suffix<'a>(
+    input: &'a str,
+    ctx: Option<&ParseContext>,
+) -> Result<(&'a str, FilterProp), nom::Err<OracleError<'a>>> {
     let (rest, relation) = alt((
         // Relative-clause frame: "<noun> that (doesn't) have/share ...".
         preceded(tag("that "), parse_name_relation_body),
@@ -1920,7 +1936,16 @@ pub(crate) fn parse_search_name_reference_suffix(
         )));
     }
 
-    let (reference, after_reference) = parse_target_disjunction(rest);
+    // CR 608.2k: with a caller context, a demonstrative reference ("that
+    // creature") must bind exactly like the sibling shared-quality grammar;
+    // without one, keep the context-free noun-phrase/disjunction parse.
+    let (reference, after_reference) = match ctx {
+        Some(ctx) => match parse_shared_quality_reference(rest, ctx) {
+            Ok((after_reference, reference)) => (reference, after_reference),
+            Err(_) => (TargetFilter::Any, rest),
+        },
+        None => parse_target_disjunction(rest),
+    };
     if !matches!(reference, TargetFilter::Any) {
         return Ok((
             after_reference,
@@ -2430,7 +2455,7 @@ fn parse_search_filter_suffixes(
             }
         }
 
-        if let Ok((rest, prop)) = parse_search_name_reference_suffix(remaining) {
+        if let Ok((rest, prop)) = parse_search_name_reference_suffix(remaining, None) {
             suffix.properties.push(prop);
             remaining = rest.trim_start();
             continue;
@@ -4299,9 +4324,11 @@ mod tests {
         // CR 201.2a + CR 201.2c + CR 303.4b + CR 303.4m: Curse of Misfortunes'
         // search filter — "a Curse card that doesn't have the same name as a
         // Curse attached to enchanted player". The negated name relation is
-        // consumed by the shared name authority through the type phrase; the
-        // reference population is the Curses attached to the enchanted player
-        // on the battlefield (CR 109.2's zone default).
+        // consumed by the shared name authority through the type phrase as the
+        // LITERAL negation of a same-name comparison (CR 201.2a), so a nameless
+        // candidate satisfies it; the reference population is the Curses
+        // attached to the enchanted player on the battlefield (CR 109.2's zone
+        // default).
         let filter = parse_search_filter(
             "curse card that doesn't have the same name as a curse attached to enchanted player",
             &mut ParseContext::default(),
@@ -4318,26 +4345,29 @@ mod tests {
         assert_eq!(filter.get_subtype(), Some("Curse"));
         assert!(filter.properties.iter().any(|property| matches!(
             property,
-            FilterProp::SharesQuality {
-                quality: SharedQuality::Name,
-                reference: Some(reference),
-                relation: SharedQualityRelation::DoesNotShare,
-            } if matches!(
-                reference.as_ref(),
-                TargetFilter::Typed(TypedFilter {
-                    type_filters,
-                    properties,
-                    ..
-                }) if type_filters.iter().any(|type_filter| matches!(type_filter, TypeFilter::Subtype(subtype) if subtype == "Curse"))
-                    && properties.iter().any(|property| matches!(
-                        property,
-                        FilterProp::AttachedTo {
-                            to: AttachmentReferent::Player {
-                                player: ControllerRef::EnchantedPlayer
+            FilterProp::Not { prop } if matches!(
+                prop.as_ref(),
+                FilterProp::SharesQuality {
+                    quality: SharedQuality::Name,
+                    reference: Some(reference),
+                    relation: SharedQualityRelation::Shares,
+                } if matches!(
+                    reference.as_ref(),
+                    TargetFilter::Typed(TypedFilter {
+                        type_filters,
+                        properties,
+                        ..
+                    }) if type_filters.iter().any(|type_filter| matches!(type_filter, TypeFilter::Subtype(subtype) if subtype == "Curse"))
+                        && properties.iter().any(|property| matches!(
+                            property,
+                            FilterProp::AttachedTo {
+                                to: AttachmentReferent::Player {
+                                    player: ControllerRef::EnchantedPlayer
+                                }
                             }
-                        }
-                    ))
-                    && properties.iter().any(|property| matches!(property, FilterProp::InZone { zone } if *zone == Zone::Battlefield))
+                        ))
+                        && properties.iter().any(|property| matches!(property, FilterProp::InZone { zone } if *zone == Zone::Battlefield))
+                )
             )
         )));
     }
@@ -4353,18 +4383,21 @@ mod tests {
         };
         assert!(filter.properties.iter().any(|property| matches!(
             property,
-            FilterProp::SharesQuality {
-                quality: SharedQuality::Name,
-                reference: Some(reference),
-                relation: SharedQualityRelation::DoesNotShare,
-            } if matches!(
-                reference.as_ref(),
-                TargetFilter::Typed(TypedFilter {
-                    type_filters,
-                    controller: Some(ControllerRef::You),
-                    properties,
-                }) if type_filters.iter().any(|type_filter| matches!(type_filter, TypeFilter::Subtype(subtype) if subtype == "Room"))
-                    && properties.iter().any(|property| matches!(property, FilterProp::InZone { zone } if *zone == Zone::Battlefield))
+            FilterProp::Not { prop } if matches!(
+                prop.as_ref(),
+                FilterProp::SharesQuality {
+                    quality: SharedQuality::Name,
+                    reference: Some(reference),
+                    relation: SharedQualityRelation::Shares,
+                } if matches!(
+                    reference.as_ref(),
+                    TargetFilter::Typed(TypedFilter {
+                        type_filters,
+                        controller: Some(ControllerRef::You),
+                        properties,
+                    }) if type_filters.iter().any(|type_filter| matches!(type_filter, TypeFilter::Subtype(subtype) if subtype == "Room"))
+                        && properties.iter().any(|property| matches!(property, FilterProp::InZone { zone } if *zone == Zone::Battlefield))
+                )
             )
         )));
     }

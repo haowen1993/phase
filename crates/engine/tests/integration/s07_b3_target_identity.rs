@@ -448,6 +448,7 @@ fn yenna_name_comparison_board(duplicate_names: bool) -> YennaBoard {
         .act(engine::types::actions::GameAction::ActivateAbility {
             source_id: yenna,
             ability_index: 0,
+            payment_mode: engine::types::game_state::CastPaymentMode::Auto,
         })
         .expect("activate Yenna");
     for _ in 0..20 {
